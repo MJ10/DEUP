@@ -1,24 +1,20 @@
 import torch
 import torch.nn as nn
-import numpy as np
 from botorch.models.model import Model
-from botorch.posteriors import Posterior
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from torch.utils.data import DataLoader, TensorDataset, Subset, ConcatDataset
+from torch.utils.data import DataLoader, TensorDataset
 
-from sklearn.neighbors import KernelDensity
-from sklearn.model_selection import GridSearchCV
+
 
 
 class EpistemicPredictor(Model):
     def __init__(self, train_X, train_Y,
                  additional_data,  # dict with keys 'ood_X', 'ood_Y' and 'train_Y_2'
                  n_hidden,
+                 density_estimator,  # Instance of the DensityEstimator (..utils.density_estimator) class
                  a_frequency=1,
-                 use_log_density=True, use_density_scaling=False
                  ):
         super(EpistemicPredictor, self).__init__()
         self.train_X = train_X
@@ -33,9 +29,10 @@ class EpistemicPredictor(Model):
         self.input_dim = train_X.size(1)
         self.output_dim = train_Y.size(1)
 
-        self.use_log_density = use_log_density
-        self.use_density_scaling = use_density_scaling
         self.a_frequency = a_frequency
+
+        self.density_estimator = density_estimator
+
         self.epoch = 0
         self.loss_fn = nn.MSELoss()
 
@@ -65,9 +62,6 @@ class EpistemicPredictor(Model):
             torch.nn.ReLU(),
             torch.nn.Linear(n_hidden, self.output_dim))
 
-        # Density Estimator
-        self.kde = KernelDensity(kernel="linear", bandwidth=0.7)
-
         self.f_optimizer = torch.optim.Adam(self.f_predictor.parameters(), lr=1e-2)
         self.e_optimizer = torch.optim.Adam(self.e_predictor.parameters(), lr=1e-3)
         self.a_optimizer = torch.optim.Adam(self.a_predictor.parameters(), lr=1e-2,
@@ -80,30 +74,15 @@ class EpistemicPredictor(Model):
         self.data_so_far = None
         self.ood_so_far = None
 
-        if self.use_density_scaling:
-            self.density_scaler = MinMaxScaler()
-
     @property
     def num_outputs(self):
-        return 1
+        return self.output_dim
 
     def pretrain_density_estimator(self, x):
         """
         Trains density estimator on input samples
         """
-        params = {'bandwidth': np.logspace(0, 1, 30), 'kernel': [  # 'tophat',
-            'gaussian',
-            # 'linear'
-        ]}
-        grid = GridSearchCV(KernelDensity(), params)
-        grid.fit(x.detach().numpy())
-
-        self.kde = grid.best_estimator_
-
-        # self.kde = KernelDensity(kernel='gaussian', bandwidth=0.7)
-        # self.kde.fit(x)
-        if self.use_density_scaling:
-            self.density_scaler.fit(self.kde.score_samples(x))
+        self.density_estimator.fit(x)
 
     def fit(self):
         """
@@ -158,7 +137,7 @@ class EpistemicPredictor(Model):
 
             x_acquired = xi.clone()
             y_acquired = yi.clone()
-        # import pdb;pdb.set_trace()
+
         if self.data_so_far is None:
             self.data_so_far = x_acquired, y_acquired
             self.ood_so_far = ood_x, ood_y
@@ -217,22 +196,7 @@ class EpistemicPredictor(Model):
         Computes uncertainty for input sample and
         returns epistemic uncertainty estimate.
         """
-        x = x.detach()
-        if x.ndim == 3:
-            assert x.size(2) == 1
-            return self._epistemic_uncertainty(x.squeeze(-1))
-        if self.use_log_density and self.use_density_scaling:
-            density_feature = torch.FloatTensor(self.density_scaler.transform(
-                self.kde.score_samples(x)
-            ))
-        elif self.use_log_density:
-            density_feature = torch.FloatTensor(self.kde.score_samples(
-                x))
-        else:
-            density_feature = torch.FloatTensor(torch.exp(
-                self.kde.score_samples(x))
-            )
-        density_feature = density_feature.unsqueeze(-1)
+        density_feature = self.density_estimator.score_samples(x)
         u_in = torch.cat((x, density_feature), dim=1)
         return self.e_predictor(u_in)
 
