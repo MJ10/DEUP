@@ -7,8 +7,6 @@ from gpytorch.distributions import MultivariateNormal
 from torch.utils.data import DataLoader, TensorDataset
 
 
-
-
 class EpistemicPredictor(Model):
     def __init__(self, train_X, train_Y,
                  additional_data,  # dict with keys 'ood_X', 'ood_Y' and 'train_Y_2'
