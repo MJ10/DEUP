@@ -12,11 +12,15 @@ from torch.utils.data import DataLoader, TensorDataset
 class EpistemicPredictor(Model):
     def __init__(self, train_X, train_Y,
                  additional_data,  # dict with keys 'ood_X', 'ood_Y' and 'train_Y_2'
-                 n_hidden,
+                 networks,  # dict with keys 'a_predictor', 'e_predictor' and 'f_predictor'
+                 optimizers,  # dict with keys 'a_optimizer', 'e_optimizer' and 'f_optimizer'
                  density_estimator,  # Instance of the DensityEstimator (..utils.density_estimator) class
+                 schedulers=None,  # dict with keys 'a_scheduler', 'e_scheduler', 'f_scheduler', if empty, no scheduler!
                  a_frequency=1,
                  ):
         super(EpistemicPredictor, self).__init__()
+        if schedulers is None:
+            schedulers = {}
         self.train_X = train_X
         self.train_Y = train_Y
 
@@ -36,40 +40,17 @@ class EpistemicPredictor(Model):
         self.epoch = 0
         self.loss_fn = nn.MSELoss()
 
-        # Aleatoric Uncertainty predictor (input: x)
-        self.a_predictor = nn.Sequential(
-            nn.Linear(self.input_dim, n_hidden),
-            nn.Tanh(),
-            nn.Linear(n_hidden, n_hidden),
-            nn.Tanh(),
-            nn.Linear(n_hidden, 1),
-            nn.Softplus())
+        self.a_predictor = networks['a_predictor']
+        self.e_predictor = networks['e_predictor']
+        self.f_predictor = networks['f_predictor']
 
-        # Epistemic Uncertainty predictor (input: (x, density(x)))
-        self.e_predictor = torch.nn.Sequential(
-            torch.nn.Linear(self.input_dim + 1, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, 1),
-            torch.nn.Softplus())
+        self.a_optimizer = optimizers['a_optimizer']
+        self.e_optimizer = optimizers['e_optimizer']
+        self.f_optimizer = optimizers['f_optimizer']
 
-        # Main function predictor
-        self.f_predictor = torch.nn.Sequential(
-            torch.nn.Linear(self.input_dim, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, n_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(n_hidden, self.output_dim))
-
-        self.f_optimizer = torch.optim.Adam(self.f_predictor.parameters(), lr=1e-2)
-        self.e_optimizer = torch.optim.Adam(self.e_predictor.parameters(), lr=1e-3)
-        self.a_optimizer = torch.optim.Adam(self.a_predictor.parameters(), lr=1e-2,
-                                            weight_decay=1e-6)
-
-        lr_lambda = lambda epoch: 0.999
-        self.scheduler = torch.optim.lr_scheduler.MultiplicativeLR(self.e_optimizer,
-                                                                   lr_lambda=lr_lambda)
+        self.schedulers = schedulers
+        if schedulers is None:
+            self.schedulers = {}
 
         self.data_so_far = None
         self.ood_so_far = None
@@ -150,8 +131,8 @@ class EpistemicPredictor(Model):
         # retrain on all data seen so far to update e for current f
         self.retrain_with_collected()
         self.epoch += 1
-        self.scheduler.step()
-        # self.scheduler_f.step()
+        for scheduler in self.schedulers.values():
+            scheduler.step()
 
         self.is_fitted = True
         return {

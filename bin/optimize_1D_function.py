@@ -5,7 +5,8 @@ from botorch.fit import fit_gpytorch_model
 from botorch.acquisition import ExpectedImprovement
 from botorch.optim import optimize_acqf
 
-from uncertaintylearning.utils import FixedKernelDensityEstimator, CVKernelDensityEstimator
+from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDensityEstimator,
+                                       create_network, create_optimizer, create_multiplicative_scheduler)
 from uncertaintylearning.models import EpistemicPredictor
 
 import numpy as np
@@ -28,14 +29,6 @@ parser.add_argument("--use-exp-log-density", action="store_true", default=False,
 parser.add_argument("--use-density-scaling", action="store_true", default=False,
                     help="If specified, log densities are scaled to [0,1] before being input to epistemic predictor")
 
-parser.add_argument("--cv-kernel", action="store_true", default=False,
-                    help="If specified, a grid search for the best kernel and kernel parameters to use is performed")
-
-parser.add_argument("--kernel", default='linear',
-                    help="kernel to use in KDE. Ignored if --cv-kernel is specified.")
-parser.add_argument("--bandwidth", type=float, default=0.7,
-                    help="bandwith of kernel in KDE. Ignored if --cv-kernel is specified")
-
 parser.add_argument("--epochs", type=int, default=5,
                     help="Number of epochs of training of the Epistemic predictor model")
 
@@ -44,6 +37,44 @@ parser.add_argument("--n-ood", type=int, default=7,
 
 parser.add_argument("--plot", action="store_true", default=False,
                     help="If specified, then for each run, all optimization steps are shown !")
+
+# Arguments specific to density estimation
+parser.add_argument("--cv-kernel", action="store_true", default=False,
+                    help="If specified, a grid search for the best kernel and kernel parameters to use is performed")
+
+parser.add_argument("--kernel", default='linear',
+                    help="kernel to use in KDE. Ignored if --cv-kernel is specified.")
+parser.add_argument("--bandwidth", type=float, default=0.7,
+                    help="bandwith of kernel in KDE. Ignored if --cv-kernel is specified")
+
+# Arguments specific to the neural networks, optimizers, and schedulers
+parser.add_argument("--n-hidden", type=int, default=64,
+                    help="number of neurons in the hidden layer for each network")
+parser.add_argument("--a-lr", type=float, default=1e-2,
+                    help="learning rate for the a network")
+parser.add_argument("--f-lr", type=float, default=1e-2,
+                    help="learning rate for the f network")
+parser.add_argument("--e-lr", type=float, default=1e-3,
+                    help="learning rate for the e network")
+parser.add_argument("--a-wd", type=float, default=1e-6,
+                    help="general weight decay for the a network")
+parser.add_argument("--f-wd", type=float, default=0,
+                    help="general weight decay for the f network")
+parser.add_argument("--e-wd", type=float, default=0,
+                    help="general weight decay for the e network")
+parser.add_argument("--a-owd", type=float,
+                    help="output layer weight decay for the a network")
+parser.add_argument("--f-owd", type=float,
+                    help="output layer weight decay for the f network")
+parser.add_argument("--e-owd", type=float,
+                    help="output layer weight decay for the e network")
+parser.add_argument("--a-schedule", type=float,
+                    help="multiplicative schedule for the a network")
+parser.add_argument("--f-schedule", type=float,
+                    help="multiplicative schedule for the f network")
+parser.add_argument("--e-schedule", type=float,
+                    help="multiplicative schedule for the e network")
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -170,9 +201,35 @@ for i in range(args.n_runs):
     else:
         density_estimator = FixedKernelDensityEstimator(args.kernel, args.bandwidth, use_log_density, use_density_scaling)
 
+    networks = {'a_predictor': create_network(1, 1, args.n_hidden, 'tanh', True),
+                'e_predictor': create_network(2, 1, args.n_hidden, 'relu', True),
+                'f_predictor': create_network(1, 1, args.n_hidden, 'relu', False)
+                }
+
+    optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], args.a_lr,
+                                                  weight_decay=args.a_wd,
+                                                  output_weight_decay=args.a_owd),
+                  'e_optimizer': create_optimizer(networks['e_predictor'], args.e_lr,
+                                                  weight_decay=args.e_wd,
+                                                  output_weight_decay=args.e_owd),
+                  'f_optimizer': create_optimizer(networks['f_predictor'], args.f_lr,
+                                                  weight_decay=args.f_wd,
+                                                  output_weight_decay=args.f_owd)
+                  }
+
+    schedulers = {'a_scheduler': create_multiplicative_scheduler(optimizers['e_optimizer'],
+                                                                 lr_schedule=args.a_schedule),
+                  'e_scheduler': create_multiplicative_scheduler(optimizers['e_optimizer'],
+                                                                 lr_schedule=args.e_schedule),
+                  'f_scheduler': create_multiplicative_scheduler(optimizers['e_optimizer'],
+                                                                 lr_schedule=args.f_schedule)
+                  }
+
     ep_runs[i] = optimize(EpistemicPredictor, plot=args.plot,
                           n_steps=args.n_steps,
-                          n_hidden=64,
+                          networks=networks,
+                          optimizers=optimizers,
+                          schedulers=schedulers,
                           a_frequency=1,
                           density_estimator=density_estimator)
 
