@@ -119,14 +119,17 @@ if args.plot:
 def optimize(model_name, plot=False, n_steps=5, **kwargs):
     train_X = X_init
     train_Y = Y_init
+
     ood_X = (bounds[1] - bounds[0]) * torch.rand(args.n_ood, 1) + bounds[0]
     additional_data = {'ood_X': ood_X,
                        'ood_Y': f(ood_X),
                        'train_Y_2': f(train_X)}
+
     state_dict = None
     max_value_per_step = [train_Y.max().item()]
     for _ in range(n_steps):
         if model_name == EpistemicPredictor:
+
             model = model_name(train_X, train_Y, additional_data, **kwargs)
             if state_dict is not None:
                 model.load_state_dict(state_dict)
@@ -152,11 +155,6 @@ def optimize(model_name, plot=False, n_steps=5, **kwargs):
             EI, bounds=bounds_t, q=1, num_restarts=5, raw_samples=50,
         )
 
-        train_X = torch.cat([train_X, candidate])
-        train_Y = torch.cat([train_Y, f(candidate)])
-        additional_data['train_Y_2'] = torch.cat([additional_data['train_Y_2'], f(candidate)])
-        state_dict = model.state_dict()
-
         if plot:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4))
             # Plot optimization objective with noise level
@@ -180,6 +178,12 @@ def optimize(model_name, plot=False, n_steps=5, **kwargs):
             ax2.legend()
 
             plt.show()
+
+        train_X = torch.cat([train_X, candidate])
+        train_Y = torch.cat([train_Y, f(candidate)])
+        if model_name == EpistemicPredictor:
+            additional_data['train_Y_2'] = torch.cat([additional_data['train_Y_2'], f(candidate)])
+        state_dict = model.state_dict()
 
         max_value_per_step.append(train_Y.max().item())
 
