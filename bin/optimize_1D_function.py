@@ -31,8 +31,9 @@ parser.add_argument("--use-density-scaling", action="store_true", default=False,
 
 parser.add_argument("--epochs", type=int, default=5,
                     help="Number of epochs of training of the Epistemic predictor model")
-
-parser.add_argument("--n-ood", type=int, default=7,
+parser.add_argument("--batch_size", type=int, default=2,
+                    help="Number of epochs of training of the Epistemic predictor model")
+parser.add_argument("--n-ood", type=int, default=5,
                     help="Number of OOD points to use at the first iteration")
 
 parser.add_argument("--plot", action="store_true", default=False,
@@ -120,6 +121,7 @@ def optimize(model_name, plot=False, n_steps=5, **kwargs):
     train_X = X_init
     train_Y = Y_init
 
+    # TODO: should ood_X and additional_data be the same for all steps ?
     ood_X = (bounds[1] - bounds[0]) * torch.rand(args.n_ood, 1) + bounds[0]
     additional_data = {'ood_X': ood_X,
                        'ood_Y': f(ood_X),
@@ -129,7 +131,6 @@ def optimize(model_name, plot=False, n_steps=5, **kwargs):
     max_value_per_step = [train_Y.max().item()]
     for _ in range(n_steps):
         if model_name == EpistemicPredictor:
-
             model = model_name(train_X, train_Y, additional_data, **kwargs)
             if state_dict is not None:
                 model.load_state_dict(state_dict)
@@ -235,7 +236,8 @@ for i in range(args.n_runs):
                           optimizers=optimizers,
                           schedulers=schedulers,
                           a_frequency=1,
-                          density_estimator=density_estimator)
+                          density_estimator=density_estimator,
+                          batch_size=args.batch_size)
 
 plt.errorbar(range(1 + args.n_steps), gp_runs.mean(0), gp_runs.std(0), label='Average maximum value reached by GP')
 plt.errorbar(range(1 + args.n_steps), ep_runs.mean(0), ep_runs.std(0), label='Average maximum value reached by EP')
