@@ -15,6 +15,7 @@ class EpistemicPredictor(Model):
                  density_estimator,  # Instance of the DensityEstimator (..utils.density_estimator) class
                  schedulers=None,  # dict with keys 'a_scheduler', 'e_scheduler', 'f_scheduler', if empty, no scheduler!
                  a_frequency=1,
+                 batch_size=16,
                  ):
         super(EpistemicPredictor, self).__init__()
         if schedulers is None:
@@ -32,6 +33,7 @@ class EpistemicPredictor(Model):
         self.output_dim = train_Y.size(1)
 
         self.a_frequency = a_frequency
+        self.actual_batch_size = min(batch_size, len(self.train_X) // 2)
 
         self.density_estimator = density_estimator
 
@@ -83,9 +85,11 @@ class EpistemicPredictor(Model):
         ood_y = self.ood_Y
         x_acquired, y_acquired = None, None
 
-        # TODO: following is a bit weird (only 1 batch)
-        loader = DataLoader(data, shuffle=True, batch_size=len(data))
-        xi = None
+        loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
+        ood_batch_size = max(1, self.actual_batch_size // (len(self.train_X) // len(self.ood_X)))
+        ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
+        ood_batches = list(ood_loader)
+
         for batch_id, (xi, yi, yi_2) in enumerate(loader):
             # Every `a_frequency` steps update a_predictor
             if self.epoch % self.a_frequency == 0:
@@ -96,6 +100,12 @@ class EpistemicPredictor(Model):
                 self.a_optimizer.step()
                 xi = torch.cat([xi, xi], dim=0)
                 yi = torch.cat([yi, yi_2], dim=0)
+
+            if batch_id < len(ood_batches):
+                ood_xi, ood_yi = ood_batches[batch_id]
+            else:
+                ood_xi = torch.empty((0, self.input_dim))
+                ood_yi = torch.empty((0, self.output_dim))
 
             # Compute f_loss on unseen data and update
             self.e_optimizer.zero_grad()
@@ -140,14 +150,12 @@ class EpistemicPredictor(Model):
         }
 
     def retrain_with_collected(self):
-        curr_loader = DataLoader(TensorDataset(*self.data_so_far), shuffle=True, batch_size=2)
-        num_batches = len(self.data_so_far[0]) // 2
-        required_batch_size = max(len(self.ood_so_far[0]) // num_batches, 1)
-        ood_loader = DataLoader(TensorDataset(*self.ood_so_far),
-                                shuffle=True, batch_size=required_batch_size)
+        curr_loader = DataLoader(TensorDataset(*self.data_so_far), shuffle=True, batch_size=self.actual_batch_size)
+        ood_batch_size = max(1, len(self.ood_so_far[0]) // (len(self.data_so_far[0]) // self.actual_batch_size))
+        ood_loader = DataLoader(TensorDataset(*self.ood_so_far), shuffle=True, batch_size=ood_batch_size)
         seen_ood_batches = list(ood_loader)
         for i, (prev_x, prev_y) in enumerate(curr_loader):
-            try:
+            if i < len(seen_ood_batches):
                 prev_ood_x, prev_ood_y = seen_ood_batches[i]
             except IndexError:
                 prev_ood_x, prev_ood_y = torch.empty(0, self.input_dim), torch.empty(0, self.output_dim)
@@ -164,11 +172,13 @@ class EpistemicPredictor(Model):
             e_loss.backward()
             self.e_optimizer.step()
 
-            self.f_optimizer.zero_grad()
-            y_hat = self.f_predictor(prev_x)
-            f_loss = self.loss_fn(y_hat, prev_y)
-            f_loss.backward()
-            self.f_optimizer.step()
+        self.f_optimizer.zero_grad()
+        y_hat = self.f_predictor(xi)
+        f_loss = self.loss_fn(y_hat, yi)
+        f_loss.backward()
+        self.f_optimizer.step()
+
+        return f_loss, e_loss
 
     def _epistemic_uncertainty(self, x):
         """
@@ -210,5 +220,3 @@ class EpistemicPredictor(Model):
         #    print('wrong')
         mvn = MultivariateNormal(means, variances.unsqueeze(-1))
         return mvn
-
-
