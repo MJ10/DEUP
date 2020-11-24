@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from math import ceil
 from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
@@ -52,8 +53,9 @@ class EpistemicPredictor(Model):
         if schedulers is None:
             self.schedulers = {}
 
-        self.data_so_far = None
-        self.ood_so_far = None
+        self.data_so_far = torch.empty((0, self.train_X.size(1))), torch.empty((0, self.train_Y.size(1)))
+
+        self.ood_so_far = torch.empty((0, self.train_X.size(1))), torch.empty((0, self.train_Y.size(1)))
 
     @property
     def num_outputs(self):
@@ -71,19 +73,10 @@ class EpistemicPredictor(Model):
         """
 
         self.train()
+        train_losses = {'a': [], 'f': [], 'e': []}
         data = TensorDataset(self.train_X, self.train_Y, self.train_Y_2)
 
-        # Train density estimator with all data so far
-        if self.data_so_far is None:
-            self.pretrain_density_estimator((data[:][0]).view(-1, 1))
-        else:
-            self.pretrain_density_estimator(torch.cat(
-                (self.data_so_far[0].view(-1, 1), (data[:][0]).view(-1, 1)),
-                dim=0))
-        # Evaluate ood samples
-        ood_x = self.ood_X
-        ood_y = self.ood_Y
-        x_acquired, y_acquired = None, None
+        self.pretrain_density_estimator(self.train_X)
 
         loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
         ood_batch_size = max(1, self.actual_batch_size // (len(self.train_X) // len(self.ood_X)))
@@ -98,6 +91,7 @@ class EpistemicPredictor(Model):
                 a_loss = self.loss_fn(a_hat, (yi - yi_2).pow(2) / 2)
                 a_loss.backward()
                 self.a_optimizer.step()
+                train_losses['a'].append(a_loss.item())
                 xi = torch.cat([xi, xi], dim=0)
                 yi = torch.cat([yi, yi_2], dim=0)
 
@@ -108,46 +102,24 @@ class EpistemicPredictor(Model):
                 ood_yi = torch.empty((0, self.output_dim))
 
             # Compute f_loss on unseen data and update
-            self.e_optimizer.zero_grad()
-            x_ = torch.cat([xi, ood_x], dim=0)
-            y_ = torch.cat([yi, ood_y], dim=0)
-            f_loss = (self.f_predictor(x_) - y_).pow(2)
-            aleatoric = self.a_predictor(x_).detach()
-            loss_hat = self._epistemic_uncertainty(x_) + aleatoric
-            e_loss = self.loss_fn(loss_hat, f_loss)
-            e_loss.backward()
-            self.e_optimizer.step()
+            f_loss, e_loss = self.train_with_batch(xi, yi, ood_xi, ood_yi)
 
-            self.f_optimizer.zero_grad()
-            y_hat = self.f_predictor(xi)
-            f_loss = self.loss_fn(y_hat, yi)
-            f_loss.backward()
-            self.f_optimizer.step()
+            train_losses['f'].append(f_loss.item())
+            train_losses['e'].append(e_loss.item())
 
-            x_acquired = xi.clone()
-            y_acquired = yi.clone()
+            self.data_so_far = (torch.cat((self.data_so_far[0], xi), dim=0),
+                                torch.cat((self.data_so_far[1], yi), dim=0))
+            self.ood_so_far = (torch.cat((self.ood_so_far[0], ood_xi), dim=0),
+                               torch.cat((self.ood_so_far[1], ood_yi), dim=0))
 
-        if self.data_so_far is None:
-            self.data_so_far = x_acquired, y_acquired
-            self.ood_so_far = ood_x, ood_y
-        else:
-            self.data_so_far = torch.cat((self.data_so_far[0], xi), dim=0), torch.cat((self.data_so_far[1], yi),
-                                                                                      dim=0)
-            self.ood_so_far = torch.cat((self.ood_so_far[0], ood_x), dim=0), torch.cat((self.ood_so_far[1], ood_y),
-                                                                                       dim=0)
-        # print(len(self.ood_so_far))
-        # retrain on all data seen so far to update e for current f
-        self.retrain_with_collected()
+            # retrain on all data seen so far to update e for current f
+            self.retrain_with_collected()
         self.epoch += 1
         for scheduler in self.schedulers.values():
             scheduler.step()
 
         self.is_fitted = True
-        return {
-            'a': a_loss.detach().item(),
-            'f': f_loss.detach().item(),
-            'e': e_loss.detach().item()
-        }
+        return train_losses
 
     def retrain_with_collected(self):
         curr_loader = DataLoader(TensorDataset(*self.data_so_far), shuffle=True, batch_size=self.actual_batch_size)
@@ -157,20 +129,23 @@ class EpistemicPredictor(Model):
         for i, (prev_x, prev_y) in enumerate(curr_loader):
             if i < len(seen_ood_batches):
                 prev_ood_x, prev_ood_y = seen_ood_batches[i]
-            except IndexError:
-                prev_ood_x, prev_ood_y = torch.empty(0, self.input_dim), torch.empty(0, self.output_dim)
-            self.e_optimizer.zero_grad()
+            else:
+                prev_ood_x = torch.empty(0, self.input_dim)
+                prev_ood_y = torch.empty(0, self.output_dim)
 
-            prev_x_ = torch.cat((prev_x, prev_ood_x), dim=0)
-            prev_y_ = torch.cat((prev_y, prev_ood_y), dim=0)
+            _ = self.train_with_batch(prev_x, prev_y, prev_ood_x, prev_ood_y)
 
-            f_loss = (self.f_predictor(prev_x_) - prev_y_).pow(2)
-            with torch.no_grad():
-                aleatoric = self.a_predictor(prev_x_)
-            loss_hat = self._epistemic_uncertainty(prev_x_) + aleatoric
-            e_loss = self.loss_fn(loss_hat, f_loss)
-            e_loss.backward()
-            self.e_optimizer.step()
+    def train_with_batch(self, xi, yi, ood_xi, ood_yi):
+        self.e_optimizer.zero_grad()
+        x_ = torch.cat([xi, ood_xi], dim=0)
+        y_ = torch.cat([yi, ood_yi], dim=0)
+        f_loss = (self.f_predictor(x_) - y_).pow(2)
+        with torch.no_grad():
+            aleatoric = self.a_predictor(x_)
+        loss_hat = self._epistemic_uncertainty(x_) + aleatoric
+        e_loss = self.loss_fn(loss_hat, f_loss)
+        e_loss.backward()
+        self.e_optimizer.step()
 
         self.f_optimizer.zero_grad()
         y_hat = self.f_predictor(xi)
