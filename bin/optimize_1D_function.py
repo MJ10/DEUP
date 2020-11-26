@@ -243,4 +243,5 @@ plt.errorbar(range(1 + args.n_steps), gp_runs.mean(0), gp_runs.std(0), label='Av
 plt.errorbar(range(1 + args.n_steps), ep_runs.mean(0), ep_runs.std(0), label='Average maximum value reached by EP')
 plt.legend()
 
+plt.savefig('results.png')
 plt.show()
