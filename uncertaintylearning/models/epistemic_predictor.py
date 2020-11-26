@@ -191,7 +191,8 @@ class EpistemicPredictor(Model):
             assert x.size(1) == 1
             return self.forward(x.squeeze(1))
         means, variances = self.get_prediction_with_uncertainty(x)
-        # if any(variances < 1e-6):
-        #    print('wrong')
-        mvn = MultivariateNormal(means, variances.unsqueeze(-1))
+
+        # Sometimes the predicted variances are too low, and MultivariateNormal doesn't accept their range
+        # We thus add 1e-6
+        mvn = MultivariateNormal(means, variances.unsqueeze(-1) + 1e-6)
         return mvn
