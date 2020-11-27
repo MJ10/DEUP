@@ -5,28 +5,38 @@ from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, random_split
 
 
 class EpistemicPredictor(Model):
     def __init__(self, train_X, train_Y,
-                 additional_data,  # dict with keys 'ood_X', 'ood_Y' and 'train_Y_2'
                  networks,  # dict with keys 'a_predictor', 'e_predictor' and 'f_predictor'
                  optimizers,  # dict with keys 'a_optimizer', 'e_optimizer' and 'f_optimizer'
                  density_estimator,  # Instance of the DensityEstimator (..utils.density_estimator) class
+                 train_Y_2=None,
                  schedulers=None,  # dict with keys 'a_scheduler', 'e_scheduler', 'f_scheduler', if empty, no scheduler!
+                 split_seed=0,  # seed to randomly split iid from ood data
                  a_frequency=1,
                  batch_size=16,
+                 iid_ratio=2/3,
+                 dataloader_seed=1,
                  ):
         super(EpistemicPredictor, self).__init__()
         if schedulers is None:
             schedulers = {}
-        self.train_X = train_X
-        self.train_Y = train_Y
 
-        self.train_Y_2 = additional_data['train_Y_2']
-        self.ood_X = additional_data['ood_X']
-        self.ood_Y = additional_data['ood_Y']
+        if train_Y_2 is None:
+            self.train_Y_2 = train_Y
+        else:
+            self.train_Y_2 = train_Y_2
+
+        generator = torch.Generator().manual_seed(split_seed)
+
+        dataset = TensorDataset(train_X, train_Y, self.train_Y_2)
+        n_train = int(iid_ratio * len(dataset))
+        train, ood = random_split(dataset, (n_train, len(dataset) - n_train), generator=generator)
+        self.train_X, self.train_Y, self.train_Y_2 = train[:]
+        self.ood_X, self.ood_Y, _ = ood[:]
 
         self.is_fitted = False
 
@@ -35,6 +45,7 @@ class EpistemicPredictor(Model):
 
         self.a_frequency = a_frequency
         self.actual_batch_size = min(batch_size, len(self.train_X) // 2)
+        assert self.actual_batch_size >= 1, "Need more input points initially !"
 
         self.density_estimator = density_estimator
 
@@ -53,9 +64,11 @@ class EpistemicPredictor(Model):
         if schedulers is None:
             self.schedulers = {}
 
-        self.data_so_far = torch.empty((0, self.train_X.size(1))), torch.empty((0, self.train_Y.size(1)))
+        self.data_so_far = torch.empty((0, self.input_dim)), torch.empty((0, self.output_dim))
 
-        self.ood_so_far = torch.empty((0, self.train_X.size(1))), torch.empty((0, self.train_Y.size(1)))
+        self.ood_so_far = torch.empty((0, self.input_dim)), torch.empty((0, self.output_dim))
+
+        self.dataloader_seed = dataloader_seed
 
     @property
     def num_outputs(self):
@@ -78,6 +91,7 @@ class EpistemicPredictor(Model):
 
         self.pretrain_density_estimator(self.train_X)
 
+        torch.manual_seed(self.dataloader_seed)
         loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
         ood_batch_size = max(1, self.actual_batch_size // (len(self.train_X) // len(self.ood_X)))
         ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
