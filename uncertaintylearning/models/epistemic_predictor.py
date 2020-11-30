@@ -179,7 +179,7 @@ class EpistemicPredictor(Model):
         Computes uncertainty for input sample and
         returns epistemic uncertainty estimate.
         """
-        density_feature = self.density_estimator.score_samples(x)
+        density_feature = self.density_estimator.score_samples(x.cpu()).to(self.device)
         u_in = torch.cat((x, density_feature), dim=1)
         return self.e_predictor(u_in)
 
