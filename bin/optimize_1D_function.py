@@ -108,7 +108,9 @@ Y = f(X, 0)
 def optimize(model_name, X_init, Y_init, n_steps=5, f=multi_optima_fct, **kwargs):
     full_train_X = X_init
     full_train_Y = Y_init
-    full_train_Y_2 = f(full_train_X)  # Set to None if uninterested in aleatoric uncertainty
+    # TODO: define in argparse whether we use one evaluation or two evaluations !
+    # full_train_Y_2 = f(full_train_X)
+    full_train_Y_2 = None
 
     f_losses = []
     e_losses = []
@@ -128,6 +130,9 @@ def optimize(model_name, X_init, Y_init, n_steps=5, f=multi_optima_fct, **kwargs
             model = model_name(full_train_X, full_train_Y, train_Y_2=full_train_Y_2,
                                density_estimator=density_estimator, device=device, **kwargs)
             model = model.to(device)
+            # TODO: remove this, this is for debugging only, as there are discrepancies on mac and linux wrt seeding !
+            print(list(map(torch.mean, model.e_predictor.parameters())))
+
             if state_dict is not None:
                 model.load_state_dict(state_dict)
             for _ in range(args.epochs):
@@ -135,6 +140,7 @@ def optimize(model_name, X_init, Y_init, n_steps=5, f=multi_optima_fct, **kwargs
                 f_losses.append(np.mean(losses['f']))
                 a_losses.append(np.mean(losses['a']))
                 e_losses.append(np.mean(losses['e']))
+
         elif model_name == SingleTaskGP:
             model = model_name(full_train_X, full_train_Y)
             mll = ExactMarginalLogLikelihood(model.likelihood, model)
@@ -167,20 +173,15 @@ if args.compare_to_gp:
 ep_runs = np.zeros((args.n_runs, args.n_steps + 1))
 
 for i in range(args.n_runs):
-    print(f"Run {i + 1}/{args.n_runs}")
     torch.manual_seed(i)
     X_init = (bounds[1] - bounds[0]) * torch.rand(args.initial_points, 1) + bounds[0]
     X_init = X_init.to(device)
     Y_init = f(X_init)
 
-    if args.compare_to_gp:
-        gp_runs[i] = optimize(SingleTaskGP, X_init, Y_init, n_steps=args.n_steps)
-
     networks = {'a_predictor': create_network(1, 1, args.n_hidden, 'tanh', True),
                 'e_predictor': create_network(2, 1, args.n_hidden, 'relu', True),
                 'f_predictor': create_network(1, 1, args.n_hidden, 'relu', False)
                 }
-
     optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], args.a_lr,
                                                   weight_decay=args.a_wd,
                                                   output_weight_decay=args.a_owd),
@@ -199,6 +200,11 @@ for i in range(args.n_runs):
                   'f_scheduler': create_multiplicative_scheduler(optimizers['e_optimizer'],
                                                                  lr_schedule=args.f_schedule)
                   }
+
+    print(f"Run {i + 1}/{args.n_runs}")
+
+    if args.compare_to_gp:
+        gp_runs[i] = optimize(SingleTaskGP, X_init, Y_init, n_steps=args.n_steps)
 
     ep_runs[i] = optimize(EpistemicPredictor, X_init, Y_init,
                           n_steps=args.n_steps,
