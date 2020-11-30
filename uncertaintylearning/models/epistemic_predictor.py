@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from math import ceil
 from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
