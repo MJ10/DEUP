@@ -1,19 +1,19 @@
-import torch
-from botorch.models import SingleTaskGP
-from gpytorch.mlls import ExactMarginalLogLikelihood
-from botorch.fit import fit_gpytorch_model
-from botorch.acquisition import ExpectedImprovement
-from botorch.optim import optimize_acqf
+import warnings
+from argparse import ArgumentParser
 
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from botorch.acquisition import ExpectedImprovement
+from botorch.fit import fit_gpytorch_model
+from botorch.models import SingleTaskGP
+from botorch.optim import optimize_acqf
+from gpytorch.mlls import ExactMarginalLogLikelihood
+
+from uncertaintylearning.models import EpistemicPredictor
 from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDensityEstimator,
                                        create_network, create_optimizer, create_multiplicative_scheduler)
-from uncertaintylearning.models import EpistemicPredictor
 
-import numpy as np
-import matplotlib.pyplot as plt
-
-from argparse import ArgumentParser
-import warnings
 warnings.filterwarnings('ignore')
 
 parser = ArgumentParser()
