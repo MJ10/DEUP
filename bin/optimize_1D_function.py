@@ -29,12 +29,10 @@ parser.add_argument("--use-exp-log-density", action="store_true", default=False,
 parser.add_argument("--use-density-scaling", action="store_true", default=False,
                     help="If specified, log densities are scaled to [0,1] before being input to epistemic predictor")
 
-parser.add_argument("--epochs", type=int, default=5,
+parser.add_argument("--epochs", type=int, default=15,
                     help="Number of epochs of training of the Epistemic predictor model")
 parser.add_argument("--batch_size", type=int, default=2,
                     help="Number of epochs of training of the Epistemic predictor model")
-parser.add_argument("--n-ood", type=int, default=5,
-                    help="Number of OOD points to use at the first iteration")
 
 parser.add_argument("--plot", action="store_true", default=False,
                     help="If specified, then for each run, all optimization steps are shown !")
@@ -43,21 +41,21 @@ parser.add_argument("--plot", action="store_true", default=False,
 parser.add_argument("--cv-kernel", action="store_true", default=False,
                     help="If specified, a grid search for the best kernel and kernel parameters to use is performed")
 
-parser.add_argument("--kernel", default='linear',
+parser.add_argument("--kernel", default='exponential',
                     help="kernel to use in KDE. Ignored if --cv-kernel is specified.")
-parser.add_argument("--bandwidth", type=float, default=0.7,
+parser.add_argument("--bandwidth", type=float, default=0.05,
                     help="bandwith of kernel in KDE. Ignored if --cv-kernel is specified")
 
 # Arguments specific to the neural networks, optimizers, and schedulers
 parser.add_argument("--n-hidden", type=int, default=64,
                     help="number of neurons in the hidden layer for each network")
-parser.add_argument("--a-lr", type=float, default=1e-2,
+parser.add_argument("--a-lr", type=float, default=1e-3,
                     help="learning rate for the a network")
-parser.add_argument("--f-lr", type=float, default=1e-2,
+parser.add_argument("--f-lr", type=float, default=1e-3,
                     help="learning rate for the f network")
-parser.add_argument("--e-lr", type=float, default=1e-3,
+parser.add_argument("--e-lr", type=float, default=1e-4,
                     help="learning rate for the e network")
-parser.add_argument("--a-wd", type=float, default=1e-6,
+parser.add_argument("--a-wd", type=float, default=0,
                     help="general weight decay for the a network")
 parser.add_argument("--f-wd", type=float, default=0,
                     help="general weight decay for the f network")
@@ -75,7 +73,6 @@ parser.add_argument("--f-schedule", type=float,
                     help="multiplicative schedule for the f network")
 parser.add_argument("--e-schedule", type=float,
                     help="multiplicative schedule for the e network")
-
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
