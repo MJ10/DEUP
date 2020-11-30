@@ -110,27 +110,38 @@ if args.plot:
     plt.show()
 
 
-def optimize(model_name, plot=False, n_steps=5, **kwargs):
-    train_X = X_init
-    train_Y = Y_init
+def optimize(model_name, X_init, Y_init, plot=False, n_steps=5, f=multi_optima_fct, **kwargs):
+    full_train_X = X_init
+    full_train_Y = Y_init
+    full_train_Y_2 = f(full_train_X)  # Set to None if uninterested in aleatoric uncertainty
 
-    # TODO: should ood_X and additional_data be the same for all steps ?
-    ood_X = (bounds[1] - bounds[0]) * torch.rand(args.n_ood, 1) + bounds[0]
-    additional_data = {'ood_X': ood_X,
-                       'ood_Y': f(ood_X),
-                       'train_Y_2': f(train_X)}
+    f_losses = []
+    e_losses = []
+    a_losses = []
 
     state_dict = None
-    max_value_per_step = [train_Y.max().item()]
+    max_value_per_step = [full_train_Y.max().item()]
     for _ in range(n_steps):
         if model_name == EpistemicPredictor:
-            model = model_name(train_X, train_Y, additional_data, **kwargs)
+            use_log_density = not args.use_exp_log_density
+            use_density_scaling = args.use_density_scaling
+            if args.cv_kernel:
+                density_estimator = CVKernelDensityEstimator(use_log_density, use_density_scaling)
+            else:
+                density_estimator = FixedKernelDensityEstimator(args.kernel, args.bandwidth, use_log_density,
+                                                                use_density_scaling)
+            model = model_name(full_train_X, full_train_Y, train_Y_2=full_train_Y_2,
+                               density_estimator=density_estimator, device=device, **kwargs)
+            model = model.to(device)
             if state_dict is not None:
                 model.load_state_dict(state_dict)
             for _ in range(args.epochs):
-                model.fit()
+                losses = model.fit()
+                f_losses.append(np.mean(losses['f']))
+                a_losses.append(np.mean(losses['a']))
+                e_losses.append(np.mean(losses['e']))
         elif model_name == SingleTaskGP:
-            model = model_name(train_X, train_Y)
+            model = model_name(full_train_X, full_train_Y)
             mll = ExactMarginalLogLikelihood(model.likelihood, model)
             if state_dict is not None:
                 model.load_state_dict(state_dict)
@@ -138,24 +149,25 @@ def optimize(model_name, plot=False, n_steps=5, **kwargs):
         else:
             raise Exception('Not sure this would work !')
 
-        EI = ExpectedImprovement(model, train_Y.max().item())
-        eis = EI(X.unsqueeze(1)).detach()
-        max_ei, argmax_ei = torch.max(eis, 0)
-        xmax = X[argmax_ei].item()
-        max_ei = max_ei.item()
+        EI = ExpectedImprovement(model, full_train_Y.max().item())
 
-        bounds_t = torch.FloatTensor([[bounds[0]], [bounds[1]]])
+        bounds_t = torch.FloatTensor([[bounds[0]], [bounds[1]]]).to(device)
         candidate, acq_value = optimize_acqf(
             EI, bounds=bounds_t, q=1, num_restarts=5, raw_samples=50,
         )
 
         if plot:
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4))
+            fig, (ax1, ax2, ax3) = plt.subplots(1, 2, figsize=(15, 4))
+
+            eis = EI(X.unsqueeze(1)).detach()
+            max_ei, argmax_ei = torch.max(eis, 0)
+            xmax = X[argmax_ei].item()
+            max_ei = max_ei.item()
+
             # Plot optimization objective with noise level
             ax1.plot(X, Y, 'y--', lw=2, label='Noise-free objective')
             ax1.plot(X, f(X), 'rx', lw=1, alpha=0.2, label='Noisy samples')
-            ax1.plot(train_X, train_Y, 'kx', mew=3, label='Initial samples')
-
+            ax1.plot(full_train_X, full_train_Y, 'kx', mew=3, label='Used for training')
             ax1.plot(X, model(X).mean.detach().squeeze(), label='mean pred')
             ax1.fill_between(X.numpy().ravel(),
                              model(X).mean.detach().numpy().ravel() - model(X).stddev.detach().numpy().ravel(),
@@ -171,15 +183,22 @@ def optimize(model_name, plot=False, n_steps=5, **kwargs):
             ax1.legend()
             ax2.legend()
 
+            ax3.plot(f_losses, label='f')
+            ax3.plot(e_losses, label='e')
+            ax3.plot(a_losses, label='a')
+            ax3.set_ylim(0, 10)
+            ax3.legend()
+
             plt.show()
 
-        train_X = torch.cat([train_X, candidate])
-        train_Y = torch.cat([train_Y, f(candidate)])
-        if model_name == EpistemicPredictor:
-            additional_data['train_Y_2'] = torch.cat([additional_data['train_Y_2'], f(candidate)])
-        state_dict = model.state_dict()
+        full_train_X = torch.cat([full_train_X, candidate])
+        full_train_Y = torch.cat([full_train_Y, f(candidate)])
+        if model_name == EpistemicPredictor and full_train_Y_2 is not None:
+            full_train_Y_2 = torch.cat([full_train_Y_2, f(candidate)])
 
-        max_value_per_step.append(train_Y.max().item())
+        # TODO: check the effect of loading state dict VS retraining from scratch
+        # state_dict = model.state_dict()
+        max_value_per_step.append(full_train_Y.max().item())
 
     return max_value_per_step
 
@@ -187,17 +206,9 @@ def optimize(model_name, plot=False, n_steps=5, **kwargs):
 gp_runs = np.zeros((args.n_runs, args.n_steps + 1))
 ep_runs = np.zeros((args.n_runs, args.n_steps + 1))
 
-use_log_density = not args.use_exp_log_density
-use_density_scaling = args.use_density_scaling
-
 for i in range(args.n_runs):
     print(f"Run {i + 1}/{args.n_runs}")
-    gp_runs[i] = optimize(SingleTaskGP, plot=args.plot, n_steps=args.n_steps)
-
-    if args.cv_kernel:
-        density_estimator = CVKernelDensityEstimator(use_log_density, use_density_scaling)
-    else:
-        density_estimator = FixedKernelDensityEstimator(args.kernel, args.bandwidth, use_log_density, use_density_scaling)
+    gp_runs[i] = optimize(SingleTaskGP, X_init, Y_init, plot=args.plot, n_steps=args.n_steps)
 
     networks = {'a_predictor': create_network(1, 1, args.n_hidden, 'tanh', True),
                 'e_predictor': create_network(2, 1, args.n_hidden, 'relu', True),
@@ -223,14 +234,14 @@ for i in range(args.n_runs):
                                                                  lr_schedule=args.f_schedule)
                   }
 
-    ep_runs[i] = optimize(EpistemicPredictor, plot=args.plot,
+    ep_runs[i] = optimize(EpistemicPredictor, X_init, Y_init, plot=args.plot,
                           n_steps=args.n_steps,
                           networks=networks,
                           optimizers=optimizers,
                           schedulers=schedulers,
                           a_frequency=1,
-                          density_estimator=density_estimator,
                           batch_size=args.batch_size)
+    print(ep_runs, gp_runs)
 
 plt.errorbar(range(1 + args.n_steps), gp_runs.mean(0), gp_runs.std(0), label='Average maximum value reached by GP')
 plt.errorbar(range(1 + args.n_steps), ep_runs.mean(0), ep_runs.std(0), label='Average maximum value reached by EP')
