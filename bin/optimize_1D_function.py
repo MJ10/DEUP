@@ -79,24 +79,19 @@ print(device)
 args = parser.parse_args()
 
 
-def f(X, noise=args.noise):
+# Pick one of the two functions
+def sinusoid_fct(X, noise=args.noise):
     return (-torch.sin(5 * X ** 2) - X ** 4 + 0.3 * X ** 3 + 2 * X ** 2 + 4.1 * X +
             noise * torch.randn_like(X))
 
 
-def repeat(f, bounds):
-    new_bounds = (bounds[0], 2 * bounds[1] - bounds[0])
+def multi_optima_fct(X, noise=args.noise):
+    return torch.sin(X) * torch.cos(5 * X) * torch.cos(22 * X) + noise * torch.randn_like(X)
 
-    def g(X, noise=args.noise):
-        return (X < bounds[1]) * f(X, noise) + (X >= bounds[1]) * (f(X - bounds[1] + bounds[0], noise) +
-                                                                   f(torch.FloatTensor([bounds[1]]), 0) -
-                                                                   f(torch.FloatTensor([bounds[0]]), 0))
 
-    return g, new_bounds
-
+f = multi_optima_fct
 
 bounds = (-1, 2)
-
 
 X_init = (bounds[1] - bounds[0]) * torch.rand(6, 1) + bounds[0]
 X_init = X_init.to(device)
@@ -109,7 +104,7 @@ Y = f(X, 0)
 # Plot optimization objective with noise level
 if args.plot:
     plt.plot(X, Y, 'y--', lw=2, label='Noise-free objective')
-    plt.plot(X, f(X), 'bx', lw=1, alpha=0.1, label='Noisy samples')
+    plt.plot(X, multi_optima_fct(X), 'bx', lw=1, alpha=0.1, label='Noisy samples')
     plt.plot(X_init, Y_init, 'kx', mew=3, label='Initial samples')
     plt.legend()
     plt.show()
