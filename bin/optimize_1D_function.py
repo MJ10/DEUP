@@ -78,8 +78,7 @@ parser.add_argument("--e-schedule", type=float,
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
+print(device)
 args = parser.parse_args()
 
 
@@ -103,9 +102,11 @@ bounds = (-1, 2)
 
 
 X_init = (bounds[1] - bounds[0]) * torch.rand(6, 1) + bounds[0]
+X_init = X_init.to(device)
 Y_init = f(X_init)
 
 X = torch.arange(bounds[0], bounds[1], 0.01).reshape(-1, 1)
+X = X.to(device)
 Y = f(X, 0)
 
 # Plot optimization objective with noise level

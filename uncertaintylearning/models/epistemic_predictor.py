@@ -19,10 +19,14 @@ class EpistemicPredictor(Model):
                  batch_size=16,
                  iid_ratio=2/3,
                  dataloader_seed=1,
+                 device=torch.device("cpu")
                  ):
         super(EpistemicPredictor, self).__init__()
+
         if schedulers is None:
             schedulers = {}
+
+        self.device = device
 
         if train_Y_2 is None:
             self.train_Y_2 = train_Y
@@ -63,9 +67,11 @@ class EpistemicPredictor(Model):
         if schedulers is None:
             self.schedulers = {}
 
-        self.data_so_far = torch.empty((0, self.input_dim)), torch.empty((0, self.output_dim))
+        self.data_so_far = (torch.empty((0, self.input_dim)).to(device),
+                            torch.empty((0, self.output_dim)).to(device))
 
-        self.ood_so_far = torch.empty((0, self.input_dim)), torch.empty((0, self.output_dim))
+        self.ood_so_far = (torch.empty((0, self.input_dim)).to(device),
+                           torch.empty((0, self.output_dim)).to(device))
 
         self.dataloader_seed = dataloader_seed
 
@@ -77,7 +83,7 @@ class EpistemicPredictor(Model):
         """
         Trains density estimator on input samples
         """
-        self.density_estimator.fit(x)
+        self.density_estimator.fit(x.cpu())
 
     def fit(self):
         """
@@ -111,8 +117,8 @@ class EpistemicPredictor(Model):
             if batch_id < len(ood_batches):
                 ood_xi, ood_yi = ood_batches[batch_id]
             else:
-                ood_xi = torch.empty((0, self.input_dim))
-                ood_yi = torch.empty((0, self.output_dim))
+                ood_xi = torch.empty((0, self.input_dim)).to(self.device)
+                ood_yi = torch.empty((0, self.output_dim)).to(self.device)
 
             # Compute f_loss on unseen data and update
             f_loss, e_loss = self.train_with_batch(xi, yi, ood_xi, ood_yi)
@@ -143,8 +149,8 @@ class EpistemicPredictor(Model):
             if i < len(seen_ood_batches):
                 prev_ood_x, prev_ood_y = seen_ood_batches[i]
             else:
-                prev_ood_x = torch.empty(0, self.input_dim)
-                prev_ood_y = torch.empty(0, self.output_dim)
+                prev_ood_x = torch.empty((0, self.input_dim)).to(self.device)
+                prev_ood_y = torch.empty((0, self.output_dim)).to(self.device)
 
             _ = self.train_with_batch(prev_x, prev_y, prev_ood_x, prev_ood_y)
 
