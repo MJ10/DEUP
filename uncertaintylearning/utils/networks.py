@@ -7,7 +7,7 @@ from collections import OrderedDict
 
 def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_output=False):
     """
-    This function instantiates and returns a 1 hidden layer NN with the corresponding parameters
+    This function instantiates and returns a NN with the corresponding parameters
     """
     if activation == 'relu':
         activation_fn = nn.ReLU
@@ -18,8 +18,10 @@ def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_
     model = nn.Sequential(OrderedDict([
         ('input_layer', nn.Linear(input_dim, n_hidden)),
         ('activation1', activation_fn()),
-        ('hidden_layer', nn.Linear(n_hidden, n_hidden)),
+        ('hidden_layer1', nn.Linear(n_hidden, n_hidden)),
         ('activation2', activation_fn()),
+        ('hidden_layer2', nn.Linear(n_hidden, n_hidden)),
+        ('activation3', activation_fn()),
         ('output_layer', nn.Linear(n_hidden, output_dim))
     ]))
 
