@@ -1,7 +1,5 @@
 import warnings
 from argparse import ArgumentParser
-
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from botorch.acquisition import ExpectedImprovement
@@ -21,6 +19,10 @@ parser.add_argument("--n-runs", type=int, default=1,
                     help="number of runs for EP-EI and GP-EI optimizers")
 parser.add_argument("--n-steps", type=int, default=25,
                     help="number of optimization steps per run (budget)")
+parser.add_argument("--initial-points", type=int, default=6,
+                    help="Number of initial points.")
+parser.add_argument("--compare-to-gp", action="store_true", default=False,
+                    help="If specified, GP-EI models are trained as well.")
 parser.add_argument("--noise", type=float, default=0.1,
                     help="standard deviation of gaussian noise added to deterministic objective")
 
@@ -31,11 +33,14 @@ parser.add_argument("--use-density-scaling", action="store_true", default=False,
 
 parser.add_argument("--epochs", type=int, default=15,
                     help="Number of epochs of training of the Epistemic predictor model")
-parser.add_argument("--batch_size", type=int, default=2,
+parser.add_argument("--batch_size", type=int, default=16,
                     help="Number of epochs of training of the Epistemic predictor model")
 
-parser.add_argument("--plot", action="store_true", default=False,
-                    help="If specified, then for each run, all optimization steps are shown !")
+# Seeds for reproducibility
+parser.add_argument("--split-seed", type=int, default=1,
+                    help="Seed for splitting data into iid and ood")
+parser.add_argument("--dataloader-seed", type=int, default=2,
+                    help="Seed for creating shuffled dataloader")
 
 # Arguments specific to density estimation
 parser.add_argument("--cv-kernel", action="store_true", default=False,
@@ -74,10 +79,12 @@ parser.add_argument("--f-schedule", type=float,
 parser.add_argument("--e-schedule", type=float,
                     help="multiplicative schedule for the e network")
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(device)
-args = parser.parse_args()
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# TODO: After a few tests, it looks like using CUDA does NOT improve speed. This probably is due to the numerous
+# TODO: copying done, and the low batch sizes. Maybe needs more investigation...
+device = torch.device("cpu")
 
+args = parser.parse_args()
 
 # Pick one of the two functions
 def sinusoid_fct(X, noise=args.noise):
@@ -88,29 +95,17 @@ def sinusoid_fct(X, noise=args.noise):
 def multi_optima_fct(X, noise=args.noise):
     return torch.sin(X) * torch.cos(5 * X) * torch.cos(22 * X) + noise * torch.randn_like(X)
 
-
+# TODO: ideally, we should have a file containing all test functions we use, and the function is selected with argparse
 f = multi_optima_fct
 
 bounds = (-1, 2)
-
-X_init = (bounds[1] - bounds[0]) * torch.rand(6, 1) + bounds[0]
-X_init = X_init.to(device)
-Y_init = f(X_init)
 
 X = torch.arange(bounds[0], bounds[1], 0.01).reshape(-1, 1)
 X = X.to(device)
 Y = f(X, 0)
 
-# Plot optimization objective with noise level
-if args.plot:
-    plt.plot(X, Y, 'y--', lw=2, label='Noise-free objective')
-    plt.plot(X, multi_optima_fct(X), 'bx', lw=1, alpha=0.1, label='Noisy samples')
-    plt.plot(X_init, Y_init, 'kx', mew=3, label='Initial samples')
-    plt.legend()
-    plt.show()
 
-
-def optimize(model_name, X_init, Y_init, plot=False, n_steps=5, f=multi_optima_fct, **kwargs):
+def optimize(model_name, X_init, Y_init, n_steps=5, f=multi_optima_fct, **kwargs):
     full_train_X = X_init
     full_train_Y = Y_init
     full_train_Y_2 = f(full_train_X)  # Set to None if uninterested in aleatoric uncertainty
@@ -150,46 +145,10 @@ def optimize(model_name, X_init, Y_init, plot=False, n_steps=5, f=multi_optima_f
             raise Exception('Not sure this would work !')
 
         EI = ExpectedImprovement(model, full_train_Y.max().item())
-
         bounds_t = torch.FloatTensor([[bounds[0]], [bounds[1]]]).to(device)
         candidate, acq_value = optimize_acqf(
             EI, bounds=bounds_t, q=1, num_restarts=5, raw_samples=50,
         )
-
-        if plot:
-            fig, (ax1, ax2, ax3) = plt.subplots(1, 2, figsize=(15, 4))
-
-            eis = EI(X.unsqueeze(1)).detach()
-            max_ei, argmax_ei = torch.max(eis, 0)
-            xmax = X[argmax_ei].item()
-            max_ei = max_ei.item()
-
-            # Plot optimization objective with noise level
-            ax1.plot(X, Y, 'y--', lw=2, label='Noise-free objective')
-            ax1.plot(X, f(X), 'rx', lw=1, alpha=0.2, label='Noisy samples')
-            ax1.plot(full_train_X, full_train_Y, 'kx', mew=3, label='Used for training')
-            ax1.plot(X, model(X).mean.detach().squeeze(), label='mean pred')
-            ax1.fill_between(X.numpy().ravel(),
-                             model(X).mean.detach().numpy().ravel() - model(X).stddev.detach().numpy().ravel(),
-                             model(X).mean.detach().numpy().ravel() + model(X).stddev.detach().numpy().ravel(),
-                             alpha=.4)
-
-            if isinstance(model, EpistemicPredictor):
-                ax1.plot(X, model.density_estimator.score_samples(X), 'r-', label='density')
-
-            ax2.plot(X, eis, 'r-', label='EI')
-            ax2.plot(X, [max_ei] * len(X), 'b--')
-            ax2.plot([xmax] * 100, torch.linspace(0, max_ei, 100), 'b--')
-            ax1.legend()
-            ax2.legend()
-
-            ax3.plot(f_losses, label='f')
-            ax3.plot(e_losses, label='e')
-            ax3.plot(a_losses, label='a')
-            ax3.set_ylim(0, 10)
-            ax3.legend()
-
-            plt.show()
 
         full_train_X = torch.cat([full_train_X, candidate])
         full_train_Y = torch.cat([full_train_Y, f(candidate)])
@@ -203,12 +162,19 @@ def optimize(model_name, X_init, Y_init, plot=False, n_steps=5, f=multi_optima_f
     return max_value_per_step
 
 
-gp_runs = np.zeros((args.n_runs, args.n_steps + 1))
+if args.compare_to_gp:
+    gp_runs = np.zeros((args.n_runs, args.n_steps + 1))
 ep_runs = np.zeros((args.n_runs, args.n_steps + 1))
 
 for i in range(args.n_runs):
     print(f"Run {i + 1}/{args.n_runs}")
-    gp_runs[i] = optimize(SingleTaskGP, X_init, Y_init, plot=args.plot, n_steps=args.n_steps)
+    torch.manual_seed(i)
+    X_init = (bounds[1] - bounds[0]) * torch.rand(args.initial_points, 1) + bounds[0]
+    X_init = X_init.to(device)
+    Y_init = f(X_init)
+
+    if args.compare_to_gp:
+        gp_runs[i] = optimize(SingleTaskGP, X_init, Y_init, n_steps=args.n_steps)
 
     networks = {'a_predictor': create_network(1, 1, args.n_hidden, 'tanh', True),
                 'e_predictor': create_network(2, 1, args.n_hidden, 'relu', True),
@@ -234,18 +200,18 @@ for i in range(args.n_runs):
                                                                  lr_schedule=args.f_schedule)
                   }
 
-    ep_runs[i] = optimize(EpistemicPredictor, X_init, Y_init, plot=args.plot,
+    ep_runs[i] = optimize(EpistemicPredictor, X_init, Y_init,
                           n_steps=args.n_steps,
                           networks=networks,
                           optimizers=optimizers,
                           schedulers=schedulers,
                           a_frequency=1,
-                          batch_size=args.batch_size)
-    print(ep_runs, gp_runs)
+                          batch_size=args.batch_size,
+                          split_seed=args.split_seed,
+                          dataloader_seed=args.dataloader_seed)
+    print("Current results of EP so far:", ep_runs[:(i + 1)])
+    if args.compare_to_gp:
+        print("Current results of GP so far:", gp_runs[:(i + 1)])
 
-plt.errorbar(range(1 + args.n_steps), gp_runs.mean(0), gp_runs.std(0), label='Average maximum value reached by GP')
-plt.errorbar(range(1 + args.n_steps), ep_runs.mean(0), ep_runs.std(0), label='Average maximum value reached by EP')
-plt.legend()
+# TODO: add something to save the results into csv for example, also save args and all parameters
 
-plt.savefig('results.png')
-plt.show()
