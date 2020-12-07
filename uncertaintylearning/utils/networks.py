@@ -47,3 +47,9 @@ def create_multiplicative_scheduler(optimizer, lr_schedule):
     if lr_schedule is None:
         lr_schedule = 1
     return MultiplicativeLR(optimizer, lr_lambda=lambda epoch: lr_schedule)
+
+
+def reset_weights(model):
+    for layer in model.children():
+        if hasattr(layer, 'reset_parameters'):
+            layer.reset_parameters()
