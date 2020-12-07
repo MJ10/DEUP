@@ -34,6 +34,11 @@ def hash_args(args, hash_size=35):
 
 def compute_exp_dir(args):
     exps_root = os.getenv('EP_EXPS_ROOT')
+    if exps_root is None:
+        print('USING "yourhomefolder/results" for results. Next time, use an environment variable EP_EXPS_ROOT')
+        exps_root = os.path.join(os.getenv('HOME'), 'results')
+    if not os.path.isdir(exps_root):
+        os.mkdir(exps_root)
     args_hash = hash_args(args)
     exp_dir = os.path.join(exps_root, args_hash)
     if os.path.isdir(exp_dir):
