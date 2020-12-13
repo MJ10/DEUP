@@ -1,2 +1,3 @@
 from .density_estimator import FixedKernelDensityEstimator, CVKernelDensityEstimator
 from .networks import create_network, create_optimizer, create_multiplicative_scheduler
+from .dropout_utils import get_uncertainty_estimate

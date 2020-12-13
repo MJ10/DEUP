@@ -8,7 +8,7 @@ from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
-from uncertaintylearning.models import EpistemicPredictor
+from uncertaintylearning.models import EpistemicPredictor, MCDropout
 from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDensityEstimator,
                                        create_network, create_optimizer, create_multiplicative_scheduler)
 
@@ -23,6 +23,8 @@ parser.add_argument("--initial-points", type=int, default=6,
                     help="Number of initial points.")
 parser.add_argument("--compare-to-gp", action="store_true", default=False,
                     help="If specified, GP-EI models are trained as well.")
+parser.add_argument("--compare-to-mcdropout", action="store_true", default=False,
+                    help="If specified, MCDropout-EI models are trained as well.")
 parser.add_argument("--noise", type=float, default=0.1,
                     help="standard deviation of gaussian noise added to deterministic objective")
 
