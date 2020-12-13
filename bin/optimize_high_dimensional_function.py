@@ -1,3 +1,5 @@
+import os
+
 import torch
 from botorch.models import SingleTaskGP
 from gpytorch.mlls import ExactMarginalLogLikelihood
@@ -11,16 +13,18 @@ from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDens
 from uncertaintylearning.models import EpistemicPredictor
 
 import numpy as np
+from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
+from matplotlib import cm
 
 from argparse import ArgumentParser
 import warnings
 warnings.filterwarnings('ignore')
 
 parser = ArgumentParser()
-parser.add_argument("--n-runs", type=int, default=1,
+parser.add_argument("--n-runs", type=int, default=3,
                     help="number of runs for EP-EI and GP-EI optimizers")
-parser.add_argument("--n-steps", type=int, default=25,
+parser.add_argument("--n-steps", type=int, default=2000,
                     help="number of optimization steps per run (budget)")
 parser.add_argument("--noise", type=float, default=0.1,
                     help="standard deviation of gaussian noise added to deterministic objective")
@@ -85,36 +89,51 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 args = parser.parse_args()
 
 
-def f(X, noise=args.noise):
-    return (-torch.sin(5 * X ** 2) - X ** 4 + 0.3 * X ** 3 + 2 * X ** 2 + 4.1 * X +
-            noise * torch.randn_like(X))
-
-def repeat(f, bounds):
-    new_bounds = (bounds[0], 2 * bounds[1] - bounds[0])
-
-    def g(X, noise=args.noise):
-        return (X < bounds[1]) * f(X, noise) + (X >= bounds[1]) * (f(X - bounds[1] + bounds[0], noise) +
-                                                                   f(torch.FloatTensor([bounds[1]]), 0) -
-                                                                   f(torch.FloatTensor([bounds[0]]), 0))
-
-    return g, new_bounds
+def f(x, noise=args.noise, xmin=-1, xmax=1, yrange=2000):
+    """
+    https://www.sfu.ca/~ssurjano/schwef.html
+    """
+    x = rescale(x, xmin, xmax, -500, 500)
+    val = x.abs().sqrt().sin().mul(x).sum(1).mul(-1).add(418.9829 * x.size(1)) + noise * torch.randn(x.size(0))
+    return - val.reshape(-1,1) / yrange
 
 
-bounds = (-1, 2)
+def rescale(x, a, b, c, d):
+    """ Rescales variable from [a, b] to [c, d]
+    """
+    return c + ((d - c) / (b - a)) * (x - a)
 
 
-X_init = (bounds[1] - bounds[0]) * torch.rand(6, 1) + bounds[0]
+bounds = (-1, 1)
+n_dim = 10
+
+X_init = (bounds[1] - bounds[0]) * torch.rand(50, n_dim) + bounds[0]
 Y_init = f(X_init)
 
-X = torch.arange(bounds[0], bounds[1], 0.01).reshape(-1, 1)
-Y = f(X, 0)
 # Plot optimization objective with noise level
 if args.plot:
-    plt.plot(X, Y, 'y--', lw=2, label='Noise-free objective')
-    plt.plot(X, f(X), 'bx', lw=1, alpha=0.1, label='Noisy samples')
-    plt.plot(X_init, Y_init, 'kx', mew=3, label='Initial samples')
+    X = torch.zeros(n_dim, torch.arange(bounds[0], bounds[1], 0.01).size(0))
+    for n in range(n_dim):
+        X[n, :] = torch.arange(bounds[0], bounds[1], 0.01)
+
+    X_mesh = np.array(np.meshgrid(X[0, :], X[1, :]))
+    Y = f(torch.tensor(np.transpose(X_mesh.reshape(n_dim, -1))), 0)
+    fig = plt.figure()
+    plt.contour(np.array(X_mesh[0]), np.array(X_mesh[1]), np.array(Y.reshape(-1, X.size(1))), lw=2, label='Noise-free objective', cmap=cm.PuBu_r)
+    cbar = plt.colorbar()
+    plt.scatter(np.array(X_init[:, 0]), np.array(X_init[:, 1]), c = np.array(Y_init), label='initial samples')
     plt.legend()
+    cbar = plt.colorbar()
     plt.show()
+
+    # fig = plt.figure()
+    # ax = fig.gca(projection='3d')
+    # surf = ax.plot_surface(np.array(X_mesh[0]), np.array(X_mesh[1]), np.array(Y.reshape(-1, X.size(1))), cmap=cm.coolwarm,
+    #                        linewidth=0, antialiased=False)
+    # ax.scatter(np.array(X_init[:, 0]), np.array(X_init[:, 1]), np.array(Y_init), marker='o',  label='Noisy samples')
+    # fig.colorbar(surf, shrink=0.5, aspect=5)
+    # plt.legend()
+    # plt.show()
 
 
 def optimize(model_name, acqf_name, plot=False, n_steps=5, **kwargs):
@@ -123,13 +142,13 @@ def optimize(model_name, acqf_name, plot=False, n_steps=5, **kwargs):
     acquired_X = []
     acquired_Y = []
 
-    ood_X = (bounds[1] - bounds[0]) * torch.rand(args.n_ood, 1) + bounds[0]
+    ood_X = (bounds[1] - bounds[0]) * torch.rand(args.n_ood, n_dim) + bounds[0]
     additional_data = {'ood_X': ood_X,
                        'ood_Y': f(ood_X),
                        'train_Y_2': f(train_X)}
     state_dict = None
     max_value_per_step = [train_Y.max().item()]
-    for _ in range(n_steps):
+    for n in range(n_steps):
         if model_name == EpistemicPredictor:
             model = model_name(train_X, train_Y, additional_data, **kwargs)
             if state_dict is not None:
@@ -148,18 +167,13 @@ def optimize(model_name, acqf_name, plot=False, n_steps=5, **kwargs):
         if acqf_name == 'EI':
             acqf = ExpectedImprovement(model, train_Y.max().item())
         elif acqf_name == 'UCB':
-            acqf = UpperConfidenceBound(model, beta=0.2)
+            acqf = UpperConfidenceBound(model, beta=beta)
         elif acqf_name == 'MES':
             candidate_set = torch.rand(100, 1)
             candidate_set = bounds[0] + (bounds[1] - bounds[0]) * candidate_set
             acqf = qMaxValueEntropy(model, candidate_set)
 
-        acqf_score = acqf(X.unsqueeze(1)).detach()
-        max_acqf_score, argmax_acqf_score = torch.max(acqf_score, 0)
-        xmax = X[argmax_acqf_score].item()
-        max_acqf = max_acqf_score.item()
-
-        bounds_t = torch.FloatTensor([[bounds[0]], [bounds[1]]])
+        bounds_t = torch.FloatTensor([[bounds[0]]*n_dim, [bounds[1]]*n_dim])
         candidate, acq_value = optimize_acqf(
             acqf, bounds=bounds_t, q=1, num_restarts=5, raw_samples=50,
         )
@@ -172,43 +186,56 @@ def optimize(model_name, acqf_name, plot=False, n_steps=5, **kwargs):
         additional_data['train_Y_2'] = torch.cat([additional_data['train_Y_2'], f(candidate)])
         state_dict = model.state_dict()
 
-        if plot:
+        if plot and n % (n_steps // 10) == 0:
+            X_acqf = torch.tensor(np.transpose(X_mesh.reshape(n_dim, -1))).unsqueeze(1)
+            acqf_score = acqf(X_acqf).detach()
+            max_acqf_score, argmax_acqf_score = torch.max(acqf_score, 0)
+            xmax = X_acqf[argmax_acqf_score]
+            max_ucb = max_acqf_score.item()
+
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4))
-            # Plot optimization objective with noise level
-            ax1.plot(X, Y, 'y--', lw=2, label='Noise-free objective')
-            ax1.plot(X, f(X), 'rx', lw=1, alpha=0.2, label='Noisy samples')
-            ax1.plot(X_init, Y_init, 'kx', mew=3, label='Initial samples')
-            ax1.plot(acquired_X, acquired_Y, 'gx', mew=3, label='Acquired samples')
-
-            ax1.plot(X, model(X).mean.detach().squeeze(), label='mean pred')
-            ax1.fill_between(X.numpy().ravel(),
-                             model(X).mean.detach().numpy().ravel() - model(X).stddev.detach().numpy().ravel(),
-                             model(X).mean.detach().numpy().ravel() + model(X).stddev.detach().numpy().ravel(),
-                             alpha=.4)
-
-            if isinstance(model, EpistemicPredictor):
-                ax1.plot(X, model.density_estimator.score_samples(X), 'r-', label='density')
-
-            ax2.plot(X, acqf_score, 'r-', label=acqf_name)
-            ax2.plot(X, [max_acqf_score] * len(X), 'b--')
-            ax2.plot([xmax] * 100, torch.linspace(0, max_acqf, 100), 'b--')
+            # Plot optimization objective + Acquired points
+            im11 = ax1.contourf(np.array(X_mesh[0]), np.array(X_mesh[1]), np.array(Y.reshape(-1, X.size(1))), lw=2,
+                        label='Noise-free objective', cmap=cm.PuBu_r)
+            plt.colorbar(im11, ax=ax1)
+            ax1.scatter(np.array(X_init[:, 0]), np.array(X_init[:, 1]), c=np.array(Y_init), marker='o', label='initial samples')
+            im12 = ax1.scatter(np.array(train_X[:, 0]), np.array(train_X[:, 1]), c=np.array(train_Y), marker='^', label='Acquired samples')
+            plt.colorbar(im12, ax=ax1)
             ax1.legend()
+            ax1.title.set_text('Schwefel function')
+            
+            # PLot acquisition function and its max point
+            im21 = ax2.contourf(np.array(X_mesh[0]), np.array(X_mesh[1]), np.array(acqf_score.reshape(-1, X.size(1))),
+                        cmap=cm.PuBu_r, label=acqf_name)
+            plt.colorbar(im21, ax=ax2)
+            im22 = ax2.scatter(np.array(xmax[0][0]), np.array(xmax[0][1]), c=np.array(max_ucb), marker='*',
+                        label='max_acqf')
+            plt.colorbar(im22, ax=ax2)
             ax2.legend()
+            ax2.title.set_text(acqf_name + '_num_steps=' + str(n))
+            if acqf_name == 'UCB':
+                ax2.title.set_text(acqf_name+'_beta='+str(beta)+'_num_steps='+str(n))
 
             plt.show()
 
         max_value_per_step.append(train_Y.max().item())
+        print(train_Y.max().item())
 
     return max_value_per_step
 
+acqf_functions = ['UCB'] #['EI', 'UCB', 'MES']
+beta = 10
 
-acqf_functions = ['EI', 'UCB', 'MES']
+save_path = 'results/schwefel/'+str(n_dim)+'d'
 gp_runs = [np.zeros((args.n_runs, args.n_steps + 1)) for _ in range(len(acqf_functions))]
 ep_runs = [np.zeros((args.n_runs, args.n_steps + 1)) for _ in range(len(acqf_functions))]
 
 use_log_density = not args.use_exp_log_density
 use_density_scaling = args.use_density_scaling
+if not os.path.exists(save_path):
+    os.mkdir(save_path)
 for acqf_idx, acqf_name in enumerate(acqf_functions):
+
     for i in range(args.n_runs):
         print(f"Run {i + 1}/{args.n_runs}")
         gp_runs[acqf_idx][i] = optimize(SingleTaskGP, acqf_name, plot=args.plot, n_steps=args.n_steps)
@@ -218,48 +245,52 @@ for acqf_idx, acqf_name in enumerate(acqf_functions):
         else:
             density_estimator = FixedKernelDensityEstimator(args.kernel, args.bandwidth, use_log_density, use_density_scaling)
 
-        if acqf_name is not 'MES':
-            networks = {'a_predictor': create_network(1, 1, args.n_hidden, 'tanh', True),
-                        'e_predictor': create_network(2, 1, args.n_hidden, 'relu', True),
-                        'f_predictor': create_network(1, 1, args.n_hidden, 'relu', False)
-                        }
-
-            optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], args.a_lr,
-                                                          weight_decay=args.a_wd,
-                                                          output_weight_decay=args.a_owd),
-                          'e_optimizer': create_optimizer(networks['e_predictor'], args.e_lr,
-                                                          weight_decay=args.e_wd,
-                                                          output_weight_decay=args.e_owd),
-                          'f_optimizer': create_optimizer(networks['f_predictor'], args.f_lr,
-                                                          weight_decay=args.f_wd,
-                                                          output_weight_decay=args.f_owd)
-                          }
-
-            schedulers = {'a_scheduler': create_multiplicative_scheduler(optimizers['e_optimizer'],
-                                                                         lr_schedule=args.a_schedule),
-                          'e_scheduler': create_multiplicative_scheduler(optimizers['e_optimizer'],
-                                                                         lr_schedule=args.e_schedule),
-                          'f_scheduler': create_multiplicative_scheduler(optimizers['e_optimizer'],
-                                                                         lr_schedule=args.f_schedule)
-                          }
-
-            ep_runs[acqf_idx][i] = optimize(EpistemicPredictor, acqf_name, plot=args.plot,
-                                  n_steps=args.n_steps,
-                                  networks=networks,
-                                  optimizers=optimizers,
-                                  schedulers=schedulers,
-                                  a_frequency=1,
-                                  density_estimator=density_estimator)
+        # networks = {'a_predictor': create_network(1, 1, args.n_hidden, 'tanh', True),
+        #             'e_predictor': create_network(2, 1, args.n_hidden, 'relu', True),
+        #             'f_predictor': create_network(1, 1, args.n_hidden, 'relu', False)
+        #             }
+        #
+        # optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], args.a_lr,
+        #                                               weight_decay=args.a_wd,
+        #                                               output_weight_decay=args.a_owd),
+        #               'e_optimizer': create_optimizer(networks['e_predictor'], args.e_lr,
+        #                                               weight_decay=args.e_wd,
+        #                                               output_weight_decay=args.e_owd),
+        #               'f_optimizer': create_optimizer(networks['f_predictor'], args.f_lr,
+        #                                               weight_decay=args.f_wd,
+        #                                               output_weight_decay=args.f_owd)
+        #               }
+        #
+        # schedulers = {'a_scheduler': create_multiplicative_scheduler(optimizers['e_optimizer'],
+        #                                                              lr_schedule=args.a_schedule),
+        #               'e_scheduler': create_multiplicative_scheduler(optimizers['e_optimizer'],
+        #                                                              lr_schedule=args.e_schedule),
+        #               'f_scheduler': create_multiplicative_scheduler(optimizers['e_optimizer'],
+        #                                                              lr_schedule=args.f_schedule)
+        #               }
+        #
+        # ep_runs[acqf_idx][i] = optimize(EpistemicPredictor, acqf_name, plot=args.plot,
+        #                       n_steps=args.n_steps,
+        #                       networks=networks,
+        #                       optimizers=optimizers,
+        #                       schedulers=schedulers,
+        #                       a_frequency=1,
+        #                       density_estimator=density_estimator)
+    if acqf_name == 'EI':
+        save_name = acqf_name
+    elif acqf_name == 'UCB':
+        save_name = acqf_name+'_beta='+str(beta)
 
     if args.save:
-        np.save('results/ep_'+acqf_name, ep_runs[acqf_idx])
-        np.save('results/gp_' + acqf_name, gp_runs[acqf_idx])
+        np.save(save_path+'/gp_' + acqf_name, gp_runs[acqf_idx])
+        np.save(save_path+'/ep_' + acqf_name, ep_runs[acqf_idx])
+
 
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 4))
 for acqf_idx, acqf_name in enumerate(acqf_functions):
     ax1.errorbar(range(1 + args.n_steps), gp_runs[acqf_idx].mean(0), gp_runs[acqf_idx].std(0), ls='-',  label='Average maximum value reached by GP with '+acqf_name)
-    ax2.errorbar(range(1 + args.n_steps), ep_runs[acqf_idx].mean(0), ep_runs[acqf_idx].std(0), ls='--',  label='Average maximum value reached by EP with '+acqf_name)
+    # ax2.errorbar(range(1 + args.n_steps), ep_runs[acqf_idx].mean(0), ep_runs[acqf_idx].std(0), ls='--',  label='Average maximum value reached by EP with '+acqf_name)
 ax1.legend()
 ax2.legend()
 
