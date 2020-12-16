@@ -194,6 +194,6 @@ for step in range(args.n_steps):
     max_value_per_step.append(full_train_Y.max().item())
     print(max_value_per_step)
 
-# Log results
-log_results(max_value_per_step, exp_dir)
+    # Log results
+    log_results(max_value_per_step, exp_dir)
 
