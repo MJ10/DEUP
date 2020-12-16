@@ -65,6 +65,12 @@ python bin/gs_optimize.py --cmd-prefix "sbatch run.sh "
 When a particular configuration of EP is picked, it can be compared to GP on many different functions (with different random seeds),
 using the `bin/run_jobs.py` script. It differs from `bin/gs_optimize.py` in that it doesn't loop through a grid of hyperparameters.
 
+## Uncertainty Estimation
+The script `bin/estimate_uncertainty.py` provides an example of how to use the `EpistemicPredictor` class to estimate aleatoric and epistemic
+uncertainty using observational data only. 
+
+WIP: requires argparse, logging...
+
 ## Logging
 As mentioned above, logging is handled by `uncertaintylearning/utils/logging.py`. Specifically, a subfolder containing a hash of the arguments (`argparse`) is created
 in the root directory of results; inside which 2 `pickle` files are created. One containing the values of the arguments/hyperparameters, and one containing the results.
