@@ -7,7 +7,10 @@ from uncertaintylearning.models import EpistemicPredictor
 
 # TODO: add argparse
 
-def oracle(x, noise=0.1):
+noise = 0.1
+
+
+def oracle(x, noise=noise):
     # returns sin(2pi x) + epsilon with epsilon ~ N(0, 0.1)
     with torch.no_grad():
         m = torch.distributions.Normal(torch.tensor([0.0]), torch.tensor([1]))
@@ -54,10 +57,14 @@ model = EpistemicPredictor(train_X=x,
                            ood_X=ood_x,
                            ood_Y=ood_y)
 
-epochs = 1
+epochs = 2
+losses = {'a': [], 'e': [], 'f': []}
 
 for i in range(epochs):
-    losses = model.fit()
+    new_losses = model.fit()
+    for key in 'afe':
+        losses[key].extend(new_losses[key])
+
 
 plt.plot(losses['f'], label='f_loss')
 plt.plot(losses['a'], label='a_loss')
@@ -86,7 +93,7 @@ e_high = predictions + np.sqrt(epistemic_u)
 plt.fill_between(x_test.numpy().ravel(), e_low, e_high, alpha=.3, label='epistemic')
 
 exp_epistemic_uncertainty = (networks['f_predictor'](x_test) - y_test).pow(2).detach().numpy().ravel()
-exp_total_uncertainty = exp_epistemic_uncertainty + 0.1
+exp_total_uncertainty = exp_epistemic_uncertainty + noise ** 2
 
 exp_e_low = predictions - np.sqrt(exp_epistemic_uncertainty)
 exp_e_high = predictions + np.sqrt(exp_epistemic_uncertainty)
