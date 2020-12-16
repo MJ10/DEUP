@@ -53,7 +53,7 @@ parser.add_argument("--cv-kernel", action="store_true", default=False,
 parser.add_argument("--kernel", default='exponential',
                     help="kernel to use in KDE. Ignored if --cv-kernel is specified.")
 parser.add_argument("--bandwidth", type=float, default=0.05,
-                    help="bandwith of kernel in KDE. Ignored if --cv-kernel is specified")
+                    help="bandwidth of kernel in KDE. Ignored if --cv-kernel is specified")
 parser.add_argument("--use-exp-log-density", action="store_true", default=False,
                     help="If specified, densities, instead of log densities, are used as input to epistemic predictor")
 parser.add_argument("--use-density-scaling", action="store_true", default=False,
