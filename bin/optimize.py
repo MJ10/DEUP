@@ -164,10 +164,21 @@ for step in range(args.n_steps):
         else:
             density_estimator = FixedKernelDensityEstimator(args.kernel, args.bandwidth, not args.use_exp_log_density,
                                                             args.use_density_scaling)
-        model = EpistemicPredictor(full_train_X, full_train_Y, networks, optimizers, density_estimator,
-                                   full_train_Y_2, schedulers, args.split_seed, args.a_frequency,
-                                   args.batch_size, args.iid_ratio, args.dataloader_seed, device, args.retrain,
-                                   bounds)
+        model = EpistemicPredictor(train_X=full_train_X,
+                                   train_Y=full_train_Y,
+                                   networks=networks,
+                                   optimizers=optimizers,
+                                   density_estimator=density_estimator,
+                                   train_Y_2=full_train_Y_2,
+                                   schedulers=schedulers,
+                                   split_seed=args.split_seed,
+                                   a_frequency=args.a_frequency,
+                                   batch_size=args.batch_size,
+                                   iid_ratio=args.iid_ratio,
+                                   dataloader_seed=args.dataloader_seed,
+                                   device=device,
+                                   retrain=args.retrain,
+                                   bounds=bounds)
         model = model.to(device)
         if state_dict is not None and not args.reset_weights:
             model.load_state_dict(state_dict)
