@@ -21,7 +21,9 @@ class EpistemicPredictor(Model):
                  dataloader_seed=1,
                  device=torch.device("cpu"),
                  retrain=True,
-                 bounds=(-1, 2)
+                 bounds=(-1, 2),
+                 ood_X=None,
+                 ood_Y=None
                  ):
         super().__init__()
 
@@ -42,12 +44,17 @@ class EpistemicPredictor(Model):
         dataset = TensorDataset(train_X, train_Y, self.train_Y_2)
 
         self.fake_data = iid_ratio if iid_ratio >= 1 else 0
-        if self.fake_data > 0:
-            train = dataset
-            ood = self.generate_fake_data(dataset)
+        if ood_X is None and ood_Y is None:
+            if self.fake_data > 0:
+                train = dataset
+                ood = self.generate_fake_data(dataset)
+            else:
+                n_train = int(iid_ratio * len(dataset))
+                train, ood = random_split(dataset, (n_train, len(dataset) - n_train), generator=generator)
         else:
-            n_train = int(iid_ratio * len(dataset))
-            train, ood = random_split(dataset, (n_train, len(dataset) - n_train), generator=generator)
+            train = dataset
+            ood = TensorDataset(ood_X, ood_Y, ood_Y)
+            self.fake_data = 0
         self.train_X, self.train_Y, self.train_Y_2 = train[:]
         self.ood_X, self.ood_Y, _ = ood[:]
 
