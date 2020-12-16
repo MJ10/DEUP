@@ -34,9 +34,7 @@ x, y, y2, x_test, y_test, ood_x, ood_y = generate_data()
 
 
 density_estimator = CVKernelDensityEstimator()
-additional_data = {'train_Y_2': y2,
-                  'ood_X': ood_x,
-                  'ood_Y': ood_y}
+
 networks = {'a_predictor': create_network(1, 1, 32, 'tanh', True),
             'e_predictor': create_network(2, 1, 32, 'relu', True),
             'f_predictor': create_network(1, 1, 64, 'relu', False)
@@ -46,12 +44,20 @@ optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], 1e-2),
               'e_optimizer': create_optimizer(networks['e_predictor'], 3e-3),
               'f_optimizer': create_optimizer(networks['f_predictor'], 1e-3)
               }
-epistemic_predictor = EpistemicPredictor(x, y, additional_data, networks, optimizers, density_estimator)
+
+model = EpistemicPredictor(train_X=x,
+                           train_Y=y,
+                           networks=networks,
+                           optimizers=optimizers,
+                           density_estimator=density_estimator,
+                           train_Y_2=y2,
+                           ood_X=ood_x,
+                           ood_Y=ood_y)
 
 epochs = 1
 
 for i in range(epochs):
-    losses = epistemic_predictor.fit()
+    losses = model.fit()
 
 plt.plot(losses['f'], label='f_loss')
 plt.plot(losses['a'], label='a_loss')
