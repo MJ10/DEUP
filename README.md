@@ -44,7 +44,7 @@ determines how much data is randomly generated.
 
 ### Example of usage:
 ```bash
-python bin/optimize.py --function booth --n-steps 50 --epochs 64 --batch-size 16 --kernel gaussian
+python bin/optimize.py --function booth --n-steps 50 --epochs 64 --batch-size 16 --iid-ratio 5 --kernel gaussian 
 --bandwidth 0.1 --n-hidden 128 --f-lr 1e-4 --e-lr 5e-4
 ```
 
