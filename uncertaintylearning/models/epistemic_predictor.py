@@ -4,27 +4,59 @@ from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, random_split
 
 
 class EpistemicPredictor(Model):
     def __init__(self, train_X, train_Y,
-                 additional_data,  # dict with keys 'ood_X', 'ood_Y' and 'train_Y_2'
                  networks,  # dict with keys 'a_predictor', 'e_predictor' and 'f_predictor'
                  optimizers,  # dict with keys 'a_optimizer', 'e_optimizer' and 'f_optimizer'
                  density_estimator,  # Instance of the DensityEstimator (..utils.density_estimator) class
+                 train_Y_2=None,
                  schedulers=None,  # dict with keys 'a_scheduler', 'e_scheduler', 'f_scheduler', if empty, no scheduler!
+                 split_seed=0,  # seed to randomly split iid from ood data
                  a_frequency=1,
+                 batch_size=16,
+                 iid_ratio=2/3,
+                 dataloader_seed=1,
+                 device=torch.device("cpu"),
+                 retrain=True,
+                 bounds=(-1, 2),
+                 ood_X=None,
+                 ood_Y=None
                  ):
-        super(EpistemicPredictor, self).__init__()
+        super().__init__()
+
         if schedulers is None:
             schedulers = {}
-        self.train_X = train_X
-        self.train_Y = train_Y
 
-        self.train_Y_2 = additional_data['train_Y_2']
-        self.ood_X = additional_data['ood_X']
-        self.ood_Y = additional_data['ood_Y']
+        self.device = device
+
+        self.bounds = bounds
+
+        if train_Y_2 is None:
+            self.train_Y_2 = train_Y
+        else:
+            self.train_Y_2 = train_Y_2
+
+        generator = torch.Generator().manual_seed(split_seed)
+
+        dataset = TensorDataset(train_X, train_Y, self.train_Y_2)
+
+        self.fake_data = iid_ratio if iid_ratio >= 1 else 0
+        if ood_X is None and ood_Y is None:
+            if self.fake_data > 0:
+                train = dataset
+                ood = self.generate_fake_data(dataset)
+            else:
+                n_train = int(iid_ratio * len(dataset))
+                train, ood = random_split(dataset, (n_train, len(dataset) - n_train), generator=generator)
+        else:
+            train = dataset
+            ood = TensorDataset(ood_X, ood_Y, ood_Y)
+            self.fake_data = 0
+        self.train_X, self.train_Y, self.train_Y_2 = train[:]
+        self.ood_X, self.ood_Y, _ = ood[:]
 
         self.is_fitted = False
 
@@ -32,6 +64,8 @@ class EpistemicPredictor(Model):
         self.output_dim = train_Y.size(1)
 
         self.a_frequency = a_frequency
+        self.actual_batch_size = min(batch_size, len(self.train_X) // 2)
+        assert self.actual_batch_size >= 1, "Need more input points initially !"
 
         self.density_estimator = density_estimator
 
@@ -50,8 +84,24 @@ class EpistemicPredictor(Model):
         if schedulers is None:
             self.schedulers = {}
 
-        self.data_so_far = None
-        self.ood_so_far = None
+        self.data_so_far = (torch.empty((0, self.input_dim)).to(device),
+                            torch.empty((0, self.output_dim)).to(device))
+
+        self.ood_so_far = (torch.empty((0, self.input_dim)).to(device),
+                           torch.empty((0, self.output_dim)).to(device))
+
+        self.dataloader_seed = dataloader_seed
+
+
+        self.retrain = retrain
+
+    def generate_fake_data(self, dataset):
+        x, y, _ = dataset[:]
+        # print("generating {} fake datapoints".format(self.fake_data * len(x)))
+        length = int(self.fake_data * x.size(0))
+        ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
+        ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+        return TensorDataset(ood_x, ood_y, ood_y)
 
     @property
     def num_outputs(self):
@@ -61,7 +111,7 @@ class EpistemicPredictor(Model):
         """
         Trains density estimator on input samples
         """
-        self.density_estimator.fit(x)
+        self.density_estimator.fit(x.cpu())
 
     def fit(self):
         """
@@ -69,23 +119,21 @@ class EpistemicPredictor(Model):
         """
 
         self.train()
+        train_losses = {'a': [], 'f': [], 'e': []}
+        # TODO: maybe pretrain after duplicating dat a?
         data = TensorDataset(self.train_X, self.train_Y, self.train_Y_2)
+        self.pretrain_density_estimator(self.train_X)
+        if self.fake_data > 0:
+            data = TensorDataset(*data[list(range(len(data))) * int(self.fake_data)])
 
-        # Train density estimator with all data so far
-        if self.data_so_far is None:
-            self.pretrain_density_estimator((data[:][0]).view(-1, 1))
-        else:
-            self.pretrain_density_estimator(torch.cat(
-                (self.data_so_far[0].view(-1, 1), (data[:][0]).view(-1, 1)),
-                dim=0))
-        # Evaluate ood samples
-        ood_x = self.ood_X
-        ood_y = self.ood_Y
-        x_acquired, y_acquired = None, None
+        torch.manual_seed(self.dataloader_seed)
+        loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
+        # ood_batch_size = max(1, self.actual_batch_size // (len(self.train_X) // len(self.ood_X)))
+        ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
 
-        # TODO: following is a bit weird (only 1 batch)
-        loader = DataLoader(data, shuffle=True, batch_size=len(data))
-        xi = None
+        ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
+        ood_batches = list(ood_loader)
+
         for batch_id, (xi, yi, yi_2) in enumerate(loader):
             # Every `a_frequency` steps update a_predictor
             if self.epoch % self.a_frequency == 0:
@@ -94,88 +142,79 @@ class EpistemicPredictor(Model):
                 a_loss = self.loss_fn(a_hat, (yi - yi_2).pow(2) / 2)
                 a_loss.backward()
                 self.a_optimizer.step()
+                train_losses['a'].append(a_loss.item())
                 xi = torch.cat([xi, xi], dim=0)
                 yi = torch.cat([yi, yi_2], dim=0)
 
+            if batch_id < len(ood_batches):
+                ood_xi, ood_yi = ood_batches[batch_id]
+            else:
+                ood_xi = torch.empty((0, self.input_dim)).to(self.device)
+                ood_yi = torch.empty((0, self.output_dim)).to(self.device)
+
             # Compute f_loss on unseen data and update
-            self.e_optimizer.zero_grad()
-            x_ = torch.cat([xi, ood_x], dim=0)
-            y_ = torch.cat([yi, ood_y], dim=0)
-            f_loss = (self.f_predictor(x_) - y_).pow(2)
-            aleatoric = self.a_predictor(x_).detach()
-            loss_hat = self._epistemic_uncertainty(x_) + aleatoric
-            e_loss = self.loss_fn(loss_hat, f_loss)
-            e_loss.backward()
-            self.e_optimizer.step()
+            f_loss, e_loss = self.train_with_batch(xi, yi, ood_xi, ood_yi)
 
-            self.f_optimizer.zero_grad()
-            y_hat = self.f_predictor(xi)
-            f_loss = self.loss_fn(y_hat, yi)
-            f_loss.backward()
-            self.f_optimizer.step()
+            train_losses['f'].append(f_loss.item())
+            train_losses['e'].append(e_loss.item())
 
-            x_acquired = xi.clone()
-            y_acquired = yi.clone()
+            self.data_so_far = (torch.cat((self.data_so_far[0], xi), dim=0),
+                                torch.cat((self.data_so_far[1], yi), dim=0))
+            self.ood_so_far = (torch.cat((self.ood_so_far[0], ood_xi), dim=0),
+                               torch.cat((self.ood_so_far[1], ood_yi), dim=0))
 
-        if self.data_so_far is None:
-            self.data_so_far = x_acquired, y_acquired
-            self.ood_so_far = ood_x, ood_y
-        else:
-            self.data_so_far = torch.cat((self.data_so_far[0], xi), dim=0), torch.cat((self.data_so_far[1], yi),
-                                                                                      dim=0)
-            self.ood_so_far = torch.cat((self.ood_so_far[0], ood_x), dim=0), torch.cat((self.ood_so_far[1], ood_y),
-                                                                                       dim=0)
-        # print(len(self.ood_so_far))
-        # retrain on all data seen so far to update e for current f
-        self.retrain_with_collected()
+            # retrain on all data seen so far to update e for current f
+            if self.retrain:
+                self.retrain_with_collected()
         self.epoch += 1
         for scheduler in self.schedulers.values():
             scheduler.step()
 
         self.is_fitted = True
-        return {
-            'a': a_loss.detach().item(),
-            'f': f_loss.detach().item(),
-            'e': e_loss.detach().item()
-        }
+        return train_losses
 
     def retrain_with_collected(self):
-        curr_loader = DataLoader(TensorDataset(*self.data_so_far), shuffle=True, batch_size=2)
-        num_batches = len(self.data_so_far[0]) // 2
-        required_batch_size = max(len(self.ood_so_far[0]) // num_batches, 1)
-        ood_loader = DataLoader(TensorDataset(*self.ood_so_far),
-                                shuffle=True, batch_size=required_batch_size)
+        curr_loader = DataLoader(TensorDataset(*self.data_so_far), shuffle=True, batch_size=self.actual_batch_size)
+        # ood_batch_size = max(1, len(self.ood_so_far[0]) // (len(self.data_so_far[0]) // self.actual_batch_size))
+        ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
+
+        ood_loader = DataLoader(TensorDataset(*self.ood_so_far), shuffle=True, batch_size=ood_batch_size)
         seen_ood_batches = list(ood_loader)
         for i, (prev_x, prev_y) in enumerate(curr_loader):
-            try:
+            if i < len(seen_ood_batches):
                 prev_ood_x, prev_ood_y = seen_ood_batches[i]
-            except IndexError:
-                prev_ood_x, prev_ood_y = torch.empty(0, self.input_dim), torch.empty(0, self.output_dim)
-            self.e_optimizer.zero_grad()
+            else:
+                prev_ood_x = torch.empty((0, self.input_dim)).to(self.device)
+                prev_ood_y = torch.empty((0, self.output_dim)).to(self.device)
 
-            prev_x_ = torch.cat((prev_x, prev_ood_x), dim=0)
-            prev_y_ = torch.cat((prev_y, prev_ood_y), dim=0)
+            _ = self.train_with_batch(prev_x, prev_y, prev_ood_x, prev_ood_y)
 
-            f_loss = (self.f_predictor(prev_x_) - prev_y_).pow(2)
-            with torch.no_grad():
-                aleatoric = self.a_predictor(prev_x_)
-            loss_hat = self._epistemic_uncertainty(prev_x_) + aleatoric
-            e_loss = self.loss_fn(loss_hat, f_loss)
-            e_loss.backward()
-            self.e_optimizer.step()
+    def train_with_batch(self, xi, yi, ood_xi, ood_yi):
+        self.e_optimizer.zero_grad()
+        x_ = torch.cat([xi, ood_xi], dim=0)
+        y_ = torch.cat([yi, ood_yi], dim=0)
+        f_loss = (self.f_predictor(x_) - y_).pow(2)
+        with torch.no_grad():
+            aleatoric = self.a_predictor(x_)
+        loss_hat = self._epistemic_uncertainty(x_) + aleatoric
+        e_loss = self.loss_fn(loss_hat, f_loss)
+        e_loss.backward()
+        self.e_optimizer.step()
 
-            self.f_optimizer.zero_grad()
-            y_hat = self.f_predictor(prev_x)
-            f_loss = self.loss_fn(y_hat, prev_y)
-            f_loss.backward()
-            self.f_optimizer.step()
+        self.f_optimizer.zero_grad()
+        y_hat = self.f_predictor(xi)
+        f_loss = self.loss_fn(y_hat, yi)
+        f_loss.backward()
+        self.f_optimizer.step()
+
+        return f_loss, e_loss
 
     def _epistemic_uncertainty(self, x):
         """
         Computes uncertainty for input sample and
         returns epistemic uncertainty estimate.
         """
-        density_feature = self.density_estimator.score_samples(x)
+        density_feature = self.density_estimator.score_samples(x.cpu()).to(self.device)
         u_in = torch.cat((x, density_feature), dim=1)
         return self.e_predictor(u_in)
 
@@ -206,9 +245,8 @@ class EpistemicPredictor(Model):
             assert x.size(1) == 1
             return self.forward(x.squeeze(1))
         means, variances = self.get_prediction_with_uncertainty(x)
-        # if any(variances < 1e-6):
-        #    print('wrong')
-        mvn = MultivariateNormal(means, variances.unsqueeze(-1))
+
+        # Sometimes the predicted variances are too low, and MultivariateNormal doesn't accept their range
+        # We thus add 1e-6
+        mvn = MultivariateNormal(means, variances.unsqueeze(-1) + 1e-6)
         return mvn
-
-

@@ -84,7 +84,7 @@ class CVKernelDensityEstimator(KernelDensityEstimator):
     def __init__(self, use_log_density=True, use_density_scaling=False):
         super().__init__(use_log_density, use_density_scaling)
         self.kde = None
-        params = {'bandwidth': np.logspace(0, 1, 20), 'kernel': ['tophat', 'gaussian', 'linear']}
+        params = {'bandwidth': np.logspace(0, 1, 20), 'kernel': ['exponential', 'tophat', 'gaussian', 'linear']}
         self.grid = GridSearchCV(KernelDensity(), params)
 
     def fit(self, training_points):
