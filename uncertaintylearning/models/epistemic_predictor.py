@@ -19,14 +19,20 @@ class EpistemicPredictor(Model):
                  batch_size=16,
                  iid_ratio=2/3,
                  dataloader_seed=1,
-                 device=torch.device("cpu")
+                 device=torch.device("cpu"),
+                 retrain=True,
+                 bounds=(-1, 2),
+                 ood_X=None,
+                 ood_Y=None
                  ):
-        super(EpistemicPredictor, self).__init__()
+        super().__init__()
 
         if schedulers is None:
             schedulers = {}
 
         self.device = device
+
+        self.bounds = bounds
 
         if train_Y_2 is None:
             self.train_Y_2 = train_Y
@@ -36,8 +42,19 @@ class EpistemicPredictor(Model):
         generator = torch.Generator().manual_seed(split_seed)
 
         dataset = TensorDataset(train_X, train_Y, self.train_Y_2)
-        n_train = int(iid_ratio * len(dataset))
-        train, ood = random_split(dataset, (n_train, len(dataset) - n_train), generator=generator)
+
+        self.fake_data = iid_ratio if iid_ratio >= 1 else 0
+        if ood_X is None and ood_Y is None:
+            if self.fake_data > 0:
+                train = dataset
+                ood = self.generate_fake_data(dataset)
+            else:
+                n_train = int(iid_ratio * len(dataset))
+                train, ood = random_split(dataset, (n_train, len(dataset) - n_train), generator=generator)
+        else:
+            train = dataset
+            ood = TensorDataset(ood_X, ood_Y, ood_Y)
+            self.fake_data = 0
         self.train_X, self.train_Y, self.train_Y_2 = train[:]
         self.ood_X, self.ood_Y, _ = ood[:]
 
@@ -75,6 +92,17 @@ class EpistemicPredictor(Model):
 
         self.dataloader_seed = dataloader_seed
 
+
+        self.retrain = retrain
+
+    def generate_fake_data(self, dataset):
+        x, y, _ = dataset[:]
+        # print("generating {} fake datapoints".format(self.fake_data * len(x)))
+        length = int(self.fake_data * x.size(0))
+        ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
+        ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+        return TensorDataset(ood_x, ood_y, ood_y)
+
     @property
     def num_outputs(self):
         return self.output_dim
@@ -92,13 +120,17 @@ class EpistemicPredictor(Model):
 
         self.train()
         train_losses = {'a': [], 'f': [], 'e': []}
+        # TODO: maybe pretrain after duplicating dat a?
         data = TensorDataset(self.train_X, self.train_Y, self.train_Y_2)
-
         self.pretrain_density_estimator(self.train_X)
+        if self.fake_data > 0:
+            data = TensorDataset(*data[list(range(len(data))) * int(self.fake_data)])
 
         torch.manual_seed(self.dataloader_seed)
         loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
-        ood_batch_size = max(1, self.actual_batch_size // (len(self.train_X) // len(self.ood_X)))
+        # ood_batch_size = max(1, self.actual_batch_size // (len(self.train_X) // len(self.ood_X)))
+        ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
+
         ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
         ood_batches = list(ood_loader)
 
@@ -132,7 +164,8 @@ class EpistemicPredictor(Model):
                                torch.cat((self.ood_so_far[1], ood_yi), dim=0))
 
             # retrain on all data seen so far to update e for current f
-            self.retrain_with_collected()
+            if self.retrain:
+                self.retrain_with_collected()
         self.epoch += 1
         for scheduler in self.schedulers.values():
             scheduler.step()
@@ -142,7 +175,9 @@ class EpistemicPredictor(Model):
 
     def retrain_with_collected(self):
         curr_loader = DataLoader(TensorDataset(*self.data_so_far), shuffle=True, batch_size=self.actual_batch_size)
-        ood_batch_size = max(1, len(self.ood_so_far[0]) // (len(self.data_so_far[0]) // self.actual_batch_size))
+        # ood_batch_size = max(1, len(self.ood_so_far[0]) // (len(self.data_so_far[0]) // self.actual_batch_size))
+        ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
+
         ood_loader = DataLoader(TensorDataset(*self.ood_so_far), shuffle=True, batch_size=ood_batch_size)
         seen_ood_batches = list(ood_loader)
         for i, (prev_x, prev_y) in enumerate(curr_loader):

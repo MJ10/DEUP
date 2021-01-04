@@ -7,7 +7,10 @@ from uncertaintylearning.models import EpistemicPredictor
 
 # TODO: add argparse
 
-def oracle(x, noise=0.1):
+noise = 0.1
+
+
+def oracle(x, noise=noise):
     # returns sin(2pi x) + epsilon with epsilon ~ N(0, 0.1)
     with torch.no_grad():
         m = torch.distributions.Normal(torch.tensor([0.0]), torch.tensor([1]))
@@ -34,9 +37,7 @@ x, y, y2, x_test, y_test, ood_x, ood_y = generate_data()
 
 
 density_estimator = CVKernelDensityEstimator()
-additional_data = {'train_Y_2': y2,
-                  'ood_X': ood_x,
-                  'ood_Y': ood_y}
+
 networks = {'a_predictor': create_network(1, 1, 32, 'tanh', True),
             'e_predictor': create_network(2, 1, 32, 'relu', True),
             'f_predictor': create_network(1, 1, 64, 'relu', False)
@@ -46,12 +47,24 @@ optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], 1e-2),
               'e_optimizer': create_optimizer(networks['e_predictor'], 3e-3),
               'f_optimizer': create_optimizer(networks['f_predictor'], 1e-3)
               }
-epistemic_predictor = EpistemicPredictor(x, y, additional_data, networks, optimizers, density_estimator)
 
-epochs = 1
+model = EpistemicPredictor(train_X=x,
+                           train_Y=y,
+                           networks=networks,
+                           optimizers=optimizers,
+                           density_estimator=density_estimator,
+                           train_Y_2=y2,
+                           ood_X=ood_x,
+                           ood_Y=ood_y)
+
+epochs = 2
+losses = {'a': [], 'e': [], 'f': []}
 
 for i in range(epochs):
-    losses = epistemic_predictor.fit()
+    new_losses = model.fit()
+    for key in 'afe':
+        losses[key].extend(new_losses[key])
+
 
 plt.plot(losses['f'], label='f_loss')
 plt.plot(losses['a'], label='a_loss')
@@ -80,7 +93,7 @@ e_high = predictions + np.sqrt(epistemic_u)
 plt.fill_between(x_test.numpy().ravel(), e_low, e_high, alpha=.3, label='epistemic')
 
 exp_epistemic_uncertainty = (networks['f_predictor'](x_test) - y_test).pow(2).detach().numpy().ravel()
-exp_total_uncertainty = exp_epistemic_uncertainty + 0.1
+exp_total_uncertainty = exp_epistemic_uncertainty + noise ** 2
 
 exp_e_low = predictions - np.sqrt(exp_epistemic_uncertainty)
 exp_e_high = predictions + np.sqrt(exp_epistemic_uncertainty)
