@@ -167,6 +167,7 @@ for step in range(args.n_steps):
         iid_ratio = args.iid_ratio
         # This looks like an ugly hack
         # TODO: maybe it would make more sense to decay the iid_ratio to 1 instead of a sudden change
+        # TODO: investigate whether it makes sense to not use fake data at all if we have many datapoints already
         if iid_ratio > 1 and full_train_Y.size(0) > 100:
             iid_ratio = 1
         model = EpistemicPredictor(train_X=full_train_X,
