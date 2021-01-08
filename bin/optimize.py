@@ -105,7 +105,7 @@ device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda e
 
 function = functions[args.function]
 
-dim, bounds = bounds[args.function]  # Bounds of the corresponding hypercube
+dim, bounds = bounds[args.function]  # Bounds of the corresponding hyperrectangle
 
 if args.seed != 0:
     torch.manual_seed(args.seed)
@@ -164,6 +164,11 @@ for step in range(args.n_steps):
         else:
             density_estimator = FixedKernelDensityEstimator(args.kernel, args.bandwidth, not args.use_exp_log_density,
                                                             args.use_density_scaling)
+        iid_ratio = args.iid_ratio
+        # This looks like an ugly hack
+        # TODO: maybe it would make more sense to decay the iid_ratio to 1 instead of a sudden change
+        if iid_ratio > 1 and full_train_Y.size(0) > 100:
+            iid_ratio = 1
         model = EpistemicPredictor(train_X=full_train_X,
                                    train_Y=full_train_Y,
                                    networks=networks,
@@ -174,7 +179,7 @@ for step in range(args.n_steps):
                                    split_seed=args.split_seed,
                                    a_frequency=args.a_frequency,
                                    batch_size=args.batch_size,
-                                   iid_ratio=args.iid_ratio,
+                                   iid_ratio=iid_ratio,
                                    dataloader_seed=args.dataloader_seed,
                                    device=device,
                                    retrain=args.retrain,
