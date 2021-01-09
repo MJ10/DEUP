@@ -30,6 +30,9 @@ class EvidentialRegression(Model):
         self.epoch = 0
 
         self.f_predictor = network
+        self.device = device
+
+        self.f_predictor.to(device)
 
         self.f_optimizer = optimizer
         
@@ -71,6 +74,7 @@ class EvidentialRegression(Model):
         loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
         for batch_id, (xi, yi) in enumerate(loader):
             self.f_optimizer.zero_grad()
+            yi = yi.to(self.device)
             ops = self.get_outputs(xi)
             # print(ops)
             f_loss = self.loss(ops, yi)
@@ -88,6 +92,7 @@ class EvidentialRegression(Model):
         }
     
     def get_outputs(self, x):
+        x = x.to(self.device)
         ops = self.f_predictor(x)
         logalpha, logbeta, gamma, logv = ops[:, 0], ops[:, 1], ops[:, 2], ops[:, 3]
         v = self.evidence(logv)
@@ -113,5 +118,5 @@ class EvidentialRegression(Model):
             return self.forward(x.squeeze(1))
         means, var = self.get_prediction_with_uncertainty(x)
         # variances = std ** 2
-        mvn = Normal(means, var)
+        mvn = Normal(means.cpu(), var.cpu())
         return mvn
