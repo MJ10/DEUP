@@ -22,6 +22,9 @@ def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_
         ('hidden_layer', nn.Linear(n_hidden, n_hidden)),
         ('activation2', activation_fn()),
         ('dropout2', nn.Dropout(p=dropout_prob)),
+        ('hidden_layer2', nn.Linear(n_hidden, n_hidden)),
+        ('activation3', activation_fn()),
+        ('dropout3', nn.Dropout(p=dropout_prob)),
         ('output_layer', nn.Linear(n_hidden, output_dim))
     ]))
 
