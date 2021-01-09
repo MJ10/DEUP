@@ -8,13 +8,14 @@ from gpytorch.distributions import MultivariateNormal
 from torch.utils.data import DataLoader, TensorDataset
 from uncertaintylearning.utils import get_uncertainty_estimate
 
+
 class MCDropout(Model):
     def __init__(self, train_X, train_Y,
-                 network,  # dict with keys 'a_predictor', 'e_predictor' and 'f_predictor'
-                 optimizer,  # dict with keys 'a_optimizer', 'e_optimizer' and 'f_optimizer'
+                 network,
+                 optimizer,
                  scheduler=None,
                  batch_size=16,
-                 device=torch.device("cpu")):
+                 device=torch.device("cpu")):  # For now, the code runs on CPU only, `.to(self.device)` should be added!
         super(MCDropout, self).__init__()
         self.train_X = train_X
         self.train_Y = train_Y
@@ -30,9 +31,11 @@ class MCDropout(Model):
         self.f_predictor = network
 
         self.f_optimizer = optimizer
-        
+
         self.actual_batch_size = min(batch_size, len(self.train_X) // 2)
 
+        # For now, the only implemented version uses self.scheduler = None.
+        # The code should be revisited if we want a scheduler
         self.scheduler = scheduler
         if scheduler is None:
             self.scheduler = {}
