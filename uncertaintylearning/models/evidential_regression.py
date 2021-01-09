@@ -10,8 +10,8 @@ from torch.utils.data import DataLoader, TensorDataset
 
 class EvidentialRegression(Model):
     def __init__(self, train_X, train_Y,
-            network,  # dict with keys 'a_predictor', 'e_predictor' and 'f_predictor'
-            optimizer,  # dict with keys 'a_optimizer', 'e_optimizer' and 'f_optimizer'
+            network,
+            optimizer,
             scheduler=None,
             batch_size=16,
             reg_coefficient=1,
