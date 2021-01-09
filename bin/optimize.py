@@ -8,7 +8,7 @@ from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
-from uncertaintylearning.models import EpistemicPredictor
+from uncertaintylearning.models import EpistemicPredictor, MCDropout
 from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDensityEstimator, functions, bounds,
                                        compute_exp_dir, log_args, log_results, create_network, create_optimizer,
                                        create_multiplicative_scheduler, reset_weights)
@@ -26,6 +26,8 @@ parser.add_argument("--initial-points", type=int, default=6,
                     help="Number of initial points.")
 parser.add_argument("--gp", action="store_true", default=False,
                     help="If specified, this will run a GP-EI model")
+parser.add_argument("--mcdrop", action="store_true", default=False,
+                    help="If specified, this will run a MCDropout-EI model")
 parser.add_argument("--seed", type=int, default=0,
                     help="seed for initial data generation, and NN initialization")
 parser.add_argument("--noise", type=float, default=0.,
@@ -93,6 +95,14 @@ parser.add_argument("--f-schedule", type=float,
 parser.add_argument("--e-schedule", type=float,
                     help="multiplicative schedule for the e network")
 
+parser.add_argument("--dropout_prob", type=float,
+                    help="dropout rate for mcdropout network")
+parser.add_argument("--lengthscale", type=float,
+                    help="lengthscale for mcdropout")
+parser.add_argument("--tau", type=float,
+                    help="tau for mcdropout")
+
+
 args = parser.parse_args()
 
 # Log arguments in a new directory
@@ -117,7 +127,7 @@ else:
     Y_init_2 = None
 X_init = X_init.to(device)
 
-if not args.gp:
+if not args.gp and not args.mcdrop:
     networks = {'a_predictor': create_network(dim, 1, args.n_hidden, 'tanh', True),
                 'e_predictor': create_network(dim + 1, 1, args.n_hidden, 'relu', True),
                 'f_predictor': create_network(dim, 1, args.n_hidden, 'relu', False)
@@ -145,6 +155,16 @@ if not args.gp:
     e_losses = []
     a_losses = []
 
+if args.mcdrop:
+    lengthscale = args.lengthscale
+    tau = args.tau
+    dropout_prob = args.dropout_prob
+    # density_estimator = FixedKernelDensityEstimator('exponential', 0.05)
+    #torch.manual_seed(8)
+    networks = {
+        'f_predictor': create_network(dim, 1, args.n_hidden, 'relu', False, dropout_prob)
+    }
+
 full_train_X = X_init
 full_train_Y = Y_init
 full_train_Y_2 = Y_init_2
@@ -158,6 +178,16 @@ for step in range(args.n_steps):
         if state_dict is not None:
             model.load_state_dict(state_dict)
         fit_gpytorch_model(mll)
+    elif args.mcdrop:
+        reg = lengthscale ** 2 * (1 - dropout_prob) / (2. * full_train_X.size(0) * tau)
+        optimizers['f_optimizer'] = create_optimizer(networks['f_predictor'], args.f_lr,
+                                                                            weight_decay=reg,
+                                                                            output_weight_decay=None)
+        model = MCDropout(full_train_X, full_train_Y, network=networks['f_predictor'], optimizer=optimizers['f_optimizer'], batch_size=args.batch_size)
+        if state_dict is not None:
+            model.load_state_dict(state_dict)
+        for _ in range(args.epochs):
+            model.fit()
     else:
         if args.cv_kernel:
             density_estimator = CVKernelDensityEstimator(not args.use_exp_log_density, args.use_density_scaling)
