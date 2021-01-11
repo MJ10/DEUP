@@ -6,6 +6,7 @@ from botorch.acquisition import ExpectedImprovement, qExpectedImprovement
 from botorch.fit import fit_gpytorch_model
 from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
+from botorch.generation.sampling import MaxPosteriorSampling
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
 from uncertaintylearning.models import EpistemicPredictor, MCDropout
@@ -234,11 +235,18 @@ for step in range(args.n_steps):
 
     if args.acquisition == 'EI':
         acquisition = ExpectedImprovement if args.q == 1 else qExpectedImprovement
-    acq = acquisition(model, full_train_Y.max().item())
-    bounds_t = torch.FloatTensor([[bounds[0]] * dim, [bounds[1]] * dim]).to(device)
-    candidate, acq_value = optimize_acqf(
-        acq, bounds=bounds_t, q=args.q, num_restarts=5, raw_samples=50,
-    )
+        acq = acquisition(model, full_train_Y.max().item())
+        bounds_t = torch.FloatTensor([[bounds[0]] * dim, [bounds[1]] * dim]).to(device)
+        candidate, acq_value = optimize_acqf(
+            acq, bounds=bounds_t, q=args.q, num_restarts=5, raw_samples=50,
+        )
+    elif args.acquisition == 'TS':
+        # TODO: better generation process ? more than 10000 ? take inspiration from TuRBO tutorial Botorch (Sobol)
+        X_cand = (bounds[1] - bounds[0]) * torch.rand(10000, dim) + bounds[0]
+        thompson_sampling = MaxPosteriorSampling(model=model, replacement=False)
+        candidate = thompson_sampling(X_cand, num_samples=args.q)
+    else:
+        raise NotImplementedError("Only EI and TS are supported")
     full_train_X = torch.cat([full_train_X, candidate])
     full_train_Y = torch.cat([full_train_Y, function(candidate.cpu(), args.noise).to(device)])
     if full_train_Y_2 is not None:
