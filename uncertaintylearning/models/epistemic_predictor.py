@@ -237,7 +237,7 @@ class EpistemicPredictor(Model):
             mean, var = self.get_prediction_with_uncertainty(x)
             return mean.detach(), var.detach().sqrt()
 
-    def posterior(self, x):
+    def posterior(self, x, output_indices=None, observation_noise=False):
         # this works with 1d output only
         # x should be a n x d tensor
         mvn = self.forward(x)
