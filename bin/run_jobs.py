@@ -52,8 +52,8 @@ epochs = 50
 
 
 for function, seed, noise in search_space:
+    function, n_steps = function
     for q in qs:
-        function, n_steps = function
         cl = f"""python optimize.py --n-steps {n_steps} \\
                  --seed {seed} --function {function} --noise {noise} \\
                  --epochs {epochs} --batch_size {batch_size} --iid-ratio {iid_ratio} --q {q}
