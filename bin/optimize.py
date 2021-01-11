@@ -2,7 +2,7 @@ import warnings
 from argparse import ArgumentParser
 import numpy as np
 import torch
-from botorch.acquisition import ExpectedImprovement
+from botorch.acquisition import ExpectedImprovement, qExpectedImprovement
 from botorch.fit import fit_gpytorch_model
 from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
@@ -34,6 +34,12 @@ parser.add_argument("--noise", type=float, default=0.,
                     help="standard deviation of gaussian noise added to deterministic objective")
 parser.add_argument("--no-cuda", action="store_true", default=False,
                     help="If specified, CPU is used even if CUDA is available")
+
+# Arguments for acquisition function
+parser.add_argument("--acquisition", default='EI',
+                    help="EI or TS")
+parser.add_argument("--q", type=int, default=1,
+                    help="Number of candidates considered jointly")
 
 # Arguments specific to EP
 parser.add_argument("--epochs", type=int, default=15,
@@ -226,10 +232,12 @@ for step in range(args.n_steps):
             a_losses.append(np.mean(losses['a']))
             e_losses.append(np.mean(losses['e']))
 
-    EI = ExpectedImprovement(model, full_train_Y.max().item())
+    if args.acquisition == 'EI':
+        acquisition = ExpectedImprovement if args.q == 1 else qExpectedImprovement
+    acq = acquisition(model, full_train_Y.max().item())
     bounds_t = torch.FloatTensor([[bounds[0]] * dim, [bounds[1]] * dim]).to(device)
     candidate, acq_value = optimize_acqf(
-        EI, bounds=bounds_t, q=1, num_restarts=5, raw_samples=50,
+        acq, bounds=bounds_t, q=args.q, num_restarts=5, raw_samples=50,
     )
     full_train_X = torch.cat([full_train_X, candidate])
     full_train_Y = torch.cat([full_train_Y, function(candidate.cpu(), args.noise).to(device)])
