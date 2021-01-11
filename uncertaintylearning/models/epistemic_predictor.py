@@ -219,6 +219,9 @@ class EpistemicPredictor(Model):
         return self.e_predictor(u_in)
 
     def get_prediction_with_uncertainty(self, x):
+        if x.ndim == 3:
+            preds = self.get_prediction_with_uncertainty(x.view(x.size(0) * x.size(1), x.size(2)))
+            return preds[0].view(x.size(0), x.size(1), 1), preds[1].view(x.size(0), x.size(1), 1)
         if not self.is_fitted:
             raise Exception('Model not fitted')
         return self.f_predictor(x), self._epistemic_uncertainty(x)
@@ -241,12 +244,24 @@ class EpistemicPredictor(Model):
         return GPyTorchPosterior(mvn)
 
     def forward(self, x):
-        if x.ndim == 3:
-            assert x.size(1) == 1
-            return self.forward(x.squeeze(1))
+        # ONLY WORKS WITH 1d output !!!!!
+        # When x is of shape n x d, the posterior should have mean of shape n, and covar of shape n x n (diagonal)
+        # When x is of shape n x q x d, the posterior should have mean of shape n x 1, and covar of shape n x q x q ( n diagonals)
+
         means, variances = self.get_prediction_with_uncertainty(x)
 
         # Sometimes the predicted variances are too low, and MultivariateNormal doesn't accept their range
-        # We thus add 1e-6
-        mvn = MultivariateNormal(means, variances.unsqueeze(-1) + 1e-6)
+
+        # TODO: maybe the two cases can be merged into one with torch.diag_embed
+        if means.ndim == 2:
+            mvn = MultivariateNormal(means.squeeze(), torch.diag(variances.squeeze() + 1e-6))
+        elif means.ndim == 3:
+            assert means.size(-1) == variances.size(-1) == 1
+            try:
+                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+            except RuntimeError:
+                print('RuntimeError')
+                print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+        else:
+            raise NotImplementedError("Something is wrong, just cmd+f this error message and you can start debugging.")
         return mvn
