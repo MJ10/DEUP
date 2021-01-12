@@ -2,7 +2,7 @@ import warnings
 from argparse import ArgumentParser
 import numpy as np
 import torch
-from botorch.acquisition import ExpectedImprovement
+from botorch.acquisition import ExpectedImprovement, qExpectedImprovement
 from botorch.fit import fit_gpytorch_model
 from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
@@ -165,6 +165,11 @@ if args.mcdrop:
         'f_predictor': create_network(dim, 1, args.n_hidden, 'relu', False, dropout_prob)
     }
 
+    optimizers = {'f_optimizer': create_optimizer(networks['f_predictor'], args.f_lr,
+                                                  weight_decay=args.f_wd,
+                                                  output_weight_decay=args.f_owd)
+                  }
+
 full_train_X = X_init
 full_train_Y = Y_init
 full_train_Y_2 = Y_init_2
@@ -183,7 +188,8 @@ for step in range(args.n_steps):
         optimizers['f_optimizer'] = create_optimizer(networks['f_predictor'], args.f_lr,
                                                                             weight_decay=reg,
                                                                             output_weight_decay=None)
-        model = MCDropout(full_train_X, full_train_Y, network=networks['f_predictor'], optimizer=optimizers['f_optimizer'], batch_size=args.batch_size)
+        model = MCDropout(full_train_X, full_train_Y, network=networks['f_predictor'], optimizer=optimizers['f_optimizer'], batch_size=args.batch_size, device=device)
+        model = model.to(device)
         if state_dict is not None:
             model.load_state_dict(state_dict)
         for _ in range(args.epochs):
@@ -220,10 +226,11 @@ for step in range(args.n_steps):
             a_losses.append(np.mean(losses['a']))
             e_losses.append(np.mean(losses['e']))
 
-    EI = ExpectedImprovement(model, full_train_Y.max().item())
+    EI = qExpectedImprovement(model, full_train_Y.max().item())
     bounds_t = torch.FloatTensor([[bounds[0]] * dim, [bounds[1]] * dim]).to(device)
+    # import pdb; pdb.set_trace();
     candidate, acq_value = optimize_acqf(
-        EI, bounds=bounds_t, q=1, num_restarts=5, raw_samples=50,
+        EI, bounds=bounds_t, q=4, num_restarts=5, raw_samples=50, sequential=True
     )
     full_train_X = torch.cat([full_train_X, candidate])
     full_train_Y = torch.cat([full_train_Y, function(candidate.cpu(), args.noise).to(device)])
