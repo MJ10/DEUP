@@ -2,7 +2,7 @@ import warnings
 from argparse import ArgumentParser
 import numpy as np
 import torch
-from botorch.acquisition import ExpectedImprovement, qExpectedImprovement
+from botorch.acquisition import ExpectedImprovement
 from botorch.fit import fit_gpytorch_model
 from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
@@ -226,11 +226,10 @@ for step in range(args.n_steps):
             a_losses.append(np.mean(losses['a']))
             e_losses.append(np.mean(losses['e']))
 
-    EI = qExpectedImprovement(model, full_train_Y.max().item())
+    EI = ExpectedImprovement(model, full_train_Y.max().item())
     bounds_t = torch.FloatTensor([[bounds[0]] * dim, [bounds[1]] * dim]).to(device)
-    # import pdb; pdb.set_trace();
     candidate, acq_value = optimize_acqf(
-        EI, bounds=bounds_t, q=4, num_restarts=5, raw_samples=50, sequential=True
+        EI, bounds=bounds_t, q=1, num_restarts=5, raw_samples=50,
     )
     full_train_X = torch.cat([full_train_X, candidate])
     full_train_Y = torch.cat([full_train_Y, function(candidate.cpu(), args.noise).to(device)])
