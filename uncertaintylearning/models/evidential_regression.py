@@ -51,15 +51,20 @@ class EvidentialRegression(Model):
     def num_outputs(self):
         return self.output_dim
 
+    def get_reg_kl(self, mu1, v1, a1, b1, mu2, v2, a2, b2):
+        pass
+
     def loss(self, ops, y):
         alpha, beta, gamma, v = ops
         twoBlambda = 2 * beta * (1 + v)
         error = torch.abs(y - gamma)
+
         nll = 0.5 * torch.log(np.pi / v) \
             - alpha * torch.log(twoBlambda) \
             + (alpha + 0.5) * torch.log(v * (y - gamma) ** 2 + twoBlambda) \
             + torch.lgamma(alpha) \
             - torch.lgamma(alpha + 0.5)
+
         if self.kl_reg:
             kl = self.get_reg_kl(mu1, v1, a1, b1, mu2, v2, a2, b2)
             reg = error * kl
@@ -93,11 +98,7 @@ class EvidentialRegression(Model):
     
     def get_outputs(self, x):
         x = x.to(self.device)
-        ops = self.f_predictor(x)
-        logalpha, logbeta, gamma, logv = ops[:, 0], ops[:, 1], ops[:, 2], ops[:, 3]
-        v = self.evidence(logv)
-        alpha = self.evidence(logalpha) + 1
-        beta = self.evidence(logbeta)
+        gamma, v, alpha, beta = self.f_predictor(x)
         return alpha, beta, gamma, v
 
     def get_prediction_with_uncertainty(self, x):
