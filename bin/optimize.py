@@ -241,10 +241,12 @@ for step in range(args.n_steps):
             acq, bounds=bounds_t, q=args.q, num_restarts=5, raw_samples=50,
         )
     elif args.acquisition == 'TS':
-        # TODO: better generation process ? more than 10000 ? take inspiration from TuRBO tutorial Botorch (Sobol)
-        X_cand = (bounds[1] - bounds[0]) * torch.rand(10000, dim) + bounds[0]
+        sobol = torch.quasirandom.SobolEngine(dim, scramble=True)
+        n_candidates = min(5000, max(2000, 200 * dim))
+        pert = sobol.draw(n_candidates)
+        X_cand = (bounds[1] - bounds[0]) * pert + bounds[0]
         thompson_sampling = MaxPosteriorSampling(model=model, replacement=False)
-        candidate = thompson_sampling(X_cand, num_samples=args.q)
+        candidate = thompson_sampling(X_cand, num_samples=q)
     else:
         raise NotImplementedError("Only EI and TS are supported")
     full_train_X = torch.cat([full_train_X, candidate])
@@ -252,7 +254,6 @@ for step in range(args.n_steps):
     if full_train_Y_2 is not None:
         full_train_Y_2 = torch.cat([full_train_Y_2, function(candidate.cpu(), args.noise).to(device)])
 
-    # TODO: check the effect of loading state dict VS retraining from scratch
     state_dict = model.state_dict()
     max_value_per_step.append(full_train_Y.max().item())
     print(max_value_per_step)
