@@ -258,7 +258,7 @@ class EpistemicPredictor(Model):
         elif means.ndim == 3:
             assert means.size(-1) == variances.size(-1) == 1
             try:
-                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
             except RuntimeError:
                 print('RuntimeError')
                 print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
