@@ -119,5 +119,5 @@ class EvidentialRegression(Model):
             return self.forward(x.squeeze(1))
         means, var = self.get_prediction_with_uncertainty(x)
         # variances = std ** 2
-        mvn = Normal(means.cpu(), var.cpu())
+        mvn = MultivariateNormal(means.cpu(), var.unsqueeze(-1).cpu())
         return mvn
