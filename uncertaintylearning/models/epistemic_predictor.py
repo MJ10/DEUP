@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from botorch.models.model import Model
+from sklearn.mixture import GaussianMixture
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
@@ -99,7 +100,12 @@ class EpistemicPredictor(Model):
         x, y, _ = dataset[:]
         # print("generating {} fake datapoints".format(self.fake_data * len(x)))
         length = int(self.fake_data * x.size(0))
-        ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
+        # fit GMM on the data points and sample the fake x from the model
+        # also tried with fewer components 
+        gmm = GaussianMixture(n_components=x.size(0), random_state=0).fit(x.cpu().numpy())
+        ood_x, _ = gmm.sample(length)
+        ood_x = torch.FloatTensor(ood_x).to(self.device)
+        # ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
         ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
         return TensorDataset(ood_x, ood_y, ood_y)
 

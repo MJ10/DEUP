@@ -246,7 +246,7 @@ for step in range(args.n_steps):
         pert = sobol.draw(n_candidates)
         X_cand = (bounds[1] - bounds[0]) * pert + bounds[0]
         thompson_sampling = MaxPosteriorSampling(model=model, replacement=False)
-        candidate = thompson_sampling(X_cand, num_samples=q)
+        candidate = thompson_sampling(X_cand.to(device), num_samples=args.q).to(device)
     else:
         raise NotImplementedError("Only EI and TS are supported")
     full_train_X = torch.cat([full_train_X, candidate])
