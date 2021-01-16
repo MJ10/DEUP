@@ -165,6 +165,11 @@ if args.mcdrop:
         'f_predictor': create_network(dim, 1, args.n_hidden, 'relu', False, dropout_prob)
     }
 
+    optimizers = {'f_optimizer': create_optimizer(networks['f_predictor'], args.f_lr,
+                                                  weight_decay=args.f_wd,
+                                                  output_weight_decay=args.f_owd)
+                  }
+
 full_train_X = X_init
 full_train_Y = Y_init
 full_train_Y_2 = Y_init_2
@@ -183,7 +188,8 @@ for step in range(args.n_steps):
         optimizers['f_optimizer'] = create_optimizer(networks['f_predictor'], args.f_lr,
                                                                             weight_decay=reg,
                                                                             output_weight_decay=None)
-        model = MCDropout(full_train_X, full_train_Y, network=networks['f_predictor'], optimizer=optimizers['f_optimizer'], batch_size=args.batch_size)
+        model = MCDropout(full_train_X, full_train_Y, network=networks['f_predictor'], optimizer=optimizers['f_optimizer'], batch_size=args.batch_size, device=device)
+        model = model.to(device)
         if state_dict is not None:
             model.load_state_dict(state_dict)
         for _ in range(args.epochs):
