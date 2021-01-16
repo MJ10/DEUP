@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
 from botorch.models.model import Model
-from sklearn.mixture import GaussianMixture
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
 from torch.utils.data import DataLoader, TensorDataset, random_split
-
+from torch.quasirandom import SobolEngine
 
 class EpistemicPredictor(Model):
     def __init__(self, train_X, train_Y,
@@ -98,15 +97,36 @@ class EpistemicPredictor(Model):
 
     def generate_fake_data(self, dataset):
         x, y, _ = dataset[:]
-        # print("generating {} fake datapoints".format(self.fake_data * len(x)))
         length = int(self.fake_data * x.size(0))
-        # fit GMM on the data points and sample the fake x from the model
-        # also tried with fewer components 
-        gmm = GaussianMixture(n_components=x.size(0), random_state=0).fit(x.cpu().numpy())
-        ood_x, _ = gmm.sample(length)
-        ood_x = torch.FloatTensor(ood_x).to(self.device)
         # ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
-        ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+
+        # sobol = SobolEngine(x.size(-1), scramble=True)
+        # pert = sobol.draw(length)
+        # X_cand = (self.bounds[1] - self.bounds[0]) * pert + self.bounds[0]
+        # Y_cand = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+
+        X_cand = torch.empty((0, x.size(-1)))
+        Y_cand = torch.empty((0, y.size(1)))
+
+        import torch.distributions as D
+        # mix = D.Categorical(torch.ones(x.size(0), ))
+        # comp = D.Independent(D.Normal(x, .5 * torch.ones_like(x)), 1)
+        # gmm = D.MixtureSameFamily(mix, comp)
+        # ood_x = gmm.sample(torch.Size([length]))
+        # ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+        # self.fake_data = int(self.fake_data)
+        cands = []
+        vals = []
+        for x_, y_ in zip(x, y):
+            cs = D.Normal(x_, .1 * torch.ones_like(x_)).sample(torch.Size([self.fake_data]))
+            X_cand = torch.cat([X_cand, cs])
+            for c in cs:
+                Y_cand = torch.cat([Y_cand, D.Normal(y_, .1 * torch.ones_like(y_)).sample().unsqueeze(1)])
+
+        #ood_x = torch.cat(cands)
+        #ood_y = torch.cat(vals).reshape(self.fake_data * y.size(0), y.size(1))
+        ood_x = X_cand
+        ood_y = Y_cand
         return TensorDataset(ood_x, ood_y, ood_y)
 
     @property
