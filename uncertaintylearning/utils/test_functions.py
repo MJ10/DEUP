@@ -2,6 +2,17 @@
 
 import numpy as np
 import torch
+from botorch.test_functions.synthetic import Ackley
+
+# TODO: ideally, all this should be wrapped in Botorch test functions base class !!
+
+
+def ackley200(X, noise):
+    return - Ackley(200, noise)(X).unsqueeze(1)
+
+
+def ackley10(X, noise):
+    return - Ackley(10, noise)(X).unsqueeze(1)
 
 
 def sinusoid(X, noise):

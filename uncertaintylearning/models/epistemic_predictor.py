@@ -5,7 +5,7 @@ from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
 from torch.utils.data import DataLoader, TensorDataset, random_split
-
+from torch.quasirandom import SobolEngine
 
 class EpistemicPredictor(Model):
     def __init__(self, train_X, train_Y,
@@ -97,10 +97,36 @@ class EpistemicPredictor(Model):
 
     def generate_fake_data(self, dataset):
         x, y, _ = dataset[:]
-        # print("generating {} fake datapoints".format(self.fake_data * len(x)))
         length = int(self.fake_data * x.size(0))
-        ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
-        ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+        # ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
+
+        # sobol = SobolEngine(x.size(-1), scramble=True)
+        # pert = sobol.draw(length)
+        # X_cand = (self.bounds[1] - self.bounds[0]) * pert + self.bounds[0]
+        # Y_cand = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+
+        X_cand = torch.empty((0, x.size(-1)))
+        Y_cand = torch.empty((0, y.size(1)))
+
+        import torch.distributions as D
+        # mix = D.Categorical(torch.ones(x.size(0), ))
+        # comp = D.Independent(D.Normal(x, .5 * torch.ones_like(x)), 1)
+        # gmm = D.MixtureSameFamily(mix, comp)
+        # ood_x = gmm.sample(torch.Size([length]))
+        # ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+        # self.fake_data = int(self.fake_data)
+        cands = []
+        vals = []
+        for x_, y_ in zip(x, y):
+            cs = D.Normal(x_, .1 * torch.ones_like(x_)).sample(torch.Size([self.fake_data]))
+            X_cand = torch.cat([X_cand, cs])
+            for c in cs:
+                Y_cand = torch.cat([Y_cand, D.Normal(y_, .1 * torch.ones_like(y_)).sample().unsqueeze(1)])
+
+        #ood_x = torch.cat(cands)
+        #ood_y = torch.cat(vals).reshape(self.fake_data * y.size(0), y.size(1))
+        ood_x = X_cand
+        ood_y = Y_cand
         return TensorDataset(ood_x, ood_y, ood_y)
 
     @property
@@ -219,6 +245,9 @@ class EpistemicPredictor(Model):
         return self.e_predictor(u_in)
 
     def get_prediction_with_uncertainty(self, x):
+        if x.ndim == 3:
+            preds = self.get_prediction_with_uncertainty(x.view(x.size(0) * x.size(1), x.size(2)))
+            return preds[0].view(x.size(0), x.size(1), 1), preds[1].view(x.size(0), x.size(1), 1)
         if not self.is_fitted:
             raise Exception('Model not fitted')
         return self.f_predictor(x), self._epistemic_uncertainty(x)
@@ -234,19 +263,31 @@ class EpistemicPredictor(Model):
             mean, var = self.get_prediction_with_uncertainty(x)
             return mean.detach(), var.detach().sqrt()
 
-    def posterior(self, x):
+    def posterior(self, x, output_indices=None, observation_noise=False):
         # this works with 1d output only
         # x should be a n x d tensor
         mvn = self.forward(x)
         return GPyTorchPosterior(mvn)
 
     def forward(self, x):
-        if x.ndim == 3:
-            assert x.size(1) == 1
-            return self.forward(x.squeeze(1))
+        # ONLY WORKS WITH 1d output !!!!!
+        # When x is of shape n x d, the posterior should have mean of shape n, and covar of shape n x n (diagonal)
+        # When x is of shape n x q x d, the posterior should have mean of shape n x 1, and covar of shape n x q x q ( n diagonals)
+
         means, variances = self.get_prediction_with_uncertainty(x)
 
         # Sometimes the predicted variances are too low, and MultivariateNormal doesn't accept their range
-        # We thus add 1e-6
-        mvn = MultivariateNormal(means, variances.unsqueeze(-1) + 1e-6)
+
+        # TODO: maybe the two cases can be merged into one with torch.diag_embed
+        if means.ndim == 2:
+            mvn = MultivariateNormal(means.squeeze(), torch.diag(variances.squeeze() + 1e-6))
+        elif means.ndim == 3:
+            assert means.size(-1) == variances.size(-1) == 1
+            try:
+                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
+            except RuntimeError:
+                print('RuntimeError')
+                print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+        else:
+            raise NotImplementedError("Something is wrong, just cmd+f this error message and you can start debugging.")
         return mvn

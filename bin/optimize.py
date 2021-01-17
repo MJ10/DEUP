@@ -2,10 +2,11 @@ import warnings
 from argparse import ArgumentParser
 import numpy as np
 import torch
-from botorch.acquisition import ExpectedImprovement
+from botorch.acquisition import ExpectedImprovement, qExpectedImprovement
 from botorch.fit import fit_gpytorch_model
 from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
+from botorch.generation.sampling import MaxPosteriorSampling
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
 from uncertaintylearning.models import EpistemicPredictor, MCDropout
@@ -34,6 +35,12 @@ parser.add_argument("--noise", type=float, default=0.,
                     help="standard deviation of gaussian noise added to deterministic objective")
 parser.add_argument("--no-cuda", action="store_true", default=False,
                     help="If specified, CPU is used even if CUDA is available")
+
+# Arguments for acquisition function
+parser.add_argument("--acquisition", default='EI',
+                    help="EI or TS")
+parser.add_argument("--q", type=int, default=1,
+                    help="Number of candidates considered jointly")
 
 # Arguments specific to EP
 parser.add_argument("--epochs", type=int, default=15,
@@ -115,7 +122,7 @@ device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda e
 
 function = functions[args.function]
 
-dim, bounds = bounds[args.function]  # Bounds of the corresponding hypercube
+dim, bounds = bounds[args.function]  # Bounds of the corresponding hyperrectangle
 
 if args.seed != 0:
     torch.manual_seed(args.seed)
@@ -200,6 +207,12 @@ for step in range(args.n_steps):
         else:
             density_estimator = FixedKernelDensityEstimator(args.kernel, args.bandwidth, not args.use_exp_log_density,
                                                             args.use_density_scaling)
+        iid_ratio = args.iid_ratio
+        # This looks like an ugly hack
+        # TODO: maybe it would make more sense to decay the iid_ratio to 1 instead of a sudden change
+        # TODO: investigate whether it makes sense to not use fake data at all if we have many datapoints already
+        if iid_ratio > 1 and full_train_Y.size(0) > 100:
+            iid_ratio = 1
         model = EpistemicPredictor(train_X=full_train_X,
                                    train_Y=full_train_Y,
                                    networks=networks,
@@ -210,7 +223,7 @@ for step in range(args.n_steps):
                                    split_seed=args.split_seed,
                                    a_frequency=args.a_frequency,
                                    batch_size=args.batch_size,
-                                   iid_ratio=args.iid_ratio,
+                                   iid_ratio=iid_ratio,
                                    dataloader_seed=args.dataloader_seed,
                                    device=device,
                                    retrain=args.retrain,
@@ -226,17 +239,27 @@ for step in range(args.n_steps):
             a_losses.append(np.mean(losses['a']))
             e_losses.append(np.mean(losses['e']))
 
-    EI = ExpectedImprovement(model, full_train_Y.max().item())
-    bounds_t = torch.FloatTensor([[bounds[0]] * dim, [bounds[1]] * dim]).to(device)
-    candidate, acq_value = optimize_acqf(
-        EI, bounds=bounds_t, q=1, num_restarts=5, raw_samples=50,
-    )
+    if args.acquisition == 'EI':
+        acquisition = ExpectedImprovement if args.q == 1 else qExpectedImprovement
+        acq = acquisition(model, full_train_Y.max().item())
+        bounds_t = torch.FloatTensor([[bounds[0]] * dim, [bounds[1]] * dim]).to(device)
+        candidate, acq_value = optimize_acqf(
+            acq, bounds=bounds_t, q=args.q, num_restarts=5, raw_samples=50,
+        )
+    elif args.acquisition == 'TS':
+        sobol = torch.quasirandom.SobolEngine(dim, scramble=True)
+        n_candidates = min(5000, max(2000, 200 * dim))
+        pert = sobol.draw(n_candidates)
+        X_cand = (bounds[1] - bounds[0]) * pert + bounds[0]
+        thompson_sampling = MaxPosteriorSampling(model=model, replacement=False)
+        candidate = thompson_sampling(X_cand.to(device), num_samples=args.q).to(device)
+    else:
+        raise NotImplementedError("Only EI and TS are supported")
     full_train_X = torch.cat([full_train_X, candidate])
     full_train_Y = torch.cat([full_train_Y, function(candidate.cpu(), args.noise).to(device)])
     if full_train_Y_2 is not None:
         full_train_Y_2 = torch.cat([full_train_Y_2, function(candidate.cpu(), args.noise).to(device)])
 
-    # TODO: check the effect of loading state dict VS retraining from scratch
     state_dict = model.state_dict()
     max_value_per_step.append(full_train_Y.max().item())
     print(max_value_per_step)
