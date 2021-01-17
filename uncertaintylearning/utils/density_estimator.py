@@ -2,8 +2,10 @@ from abc import ABC, abstractmethod
 from sklearn.neighbors import KernelDensity
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import GridSearchCV
+from .maf import MAFMOG
 
 import torch
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 
 
@@ -24,8 +26,8 @@ class DensityEstimator(ABC):
 
 
 class DistanceEstimator(DensityEstimator):
-    def __init__(self, use_log_density=True):
-        self.postprocessor = IdentityPostprocessor(exponentiate=not use_log_density)
+    def __init__(self):
+        self.postprocessor = IdentityPostprocessor()
 
     def fit(self, training_points):
         self.dim = training_points.shape[1]
@@ -54,6 +56,57 @@ class IdentityPostprocessor:
         if self.exponentiate:
             return torch.exp(values)
         return values
+
+
+class MAFMOGDensityEstimator(DensityEstimator):
+    """
+    Masked Auto Regressive Flow to estimate log-probabilities, works on 2d or more
+    """
+    def __init__(self, batch_size=10, n_blocks=5, n_components=1, hidden_size=64,
+                 n_hidden=2, batch_norm=False, lr=1e-4, use_log_density=True):
+        self.batch_size = batch_size
+        self.n_blocks = n_blocks
+        self.n_components = n_components
+        self.hidden_size = hidden_size
+        self.n_hidden = n_hidden
+        self.batch_norm = batch_norm
+        self.lr = lr
+
+        self.postprocessor = IdentityPostprocessor(exponentiate=not use_log_density)
+
+    def fit(self, training_points):
+        self.dim = training_points.size(-1)
+        self.model = MAFMOG(self.n_blocks, self.n_components, self.dim, self.hidden_size, self.n_hidden,
+                            batch_norm=self.batch_norm)
+
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-6)
+
+        ds = TensorDataset(training_points)
+        dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=True)
+
+        for i, data in enumerate(dataloader):
+            self.model.train()
+
+            # check if labeled dataset
+            x = data[0]
+            x = x.view(x.shape[0], -1)
+
+            loss = - self.model.log_prob(x, None).mean(0)
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+    def score_samples(self, test_points):
+        ds = TensorDataset(test_points)
+        dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=False)
+
+        logprobs = []
+        for data in dataloader:
+            x = data[0].view(data[0].shape[0], -1)
+            logprobs.append(self.model.log_prob(x))
+        logprobs = torch.cat(logprobs, dim=0)
+        return logprobs
 
 
 class KernelDensityEstimator(DensityEstimator):

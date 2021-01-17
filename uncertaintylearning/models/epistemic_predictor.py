@@ -5,13 +5,14 @@ from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
 from torch.utils.data import DataLoader, TensorDataset, random_split
-from torch.quasirandom import SobolEngine
+from uncertaintylearning.utils import DistanceEstimator
+
 
 class EpistemicPredictor(Model):
     def __init__(self, train_X, train_Y,
                  networks,  # dict with keys 'a_predictor', 'e_predictor' and 'f_predictor'
                  optimizers,  # dict with keys 'a_optimizer', 'e_optimizer' and 'f_optimizer'
-                 density_estimator,  # Instance of the DensityEstimator (..utils.density_estimator) class
+                 density_estimator=None,  # Instance of the DensityEstimator (..utils.density_estimator) class
                  train_Y_2=None,
                  schedulers=None,  # dict with keys 'a_scheduler', 'e_scheduler', 'f_scheduler', if empty, no scheduler!
                  split_seed=0,  # seed to randomly split iid from ood data
@@ -22,6 +23,8 @@ class EpistemicPredictor(Model):
                  device=torch.device("cpu"),
                  retrain=True,
                  bounds=(-1, 2),
+                 features='xd',  # x for input, d for density, D for distance, v for variance
+                 variance_source=None,
                  ood_X=None,
                  ood_Y=None
                  ):
@@ -31,6 +34,7 @@ class EpistemicPredictor(Model):
             schedulers = {}
 
         self.device = device
+        self.features = features
 
         self.bounds = bounds
 
@@ -68,6 +72,11 @@ class EpistemicPredictor(Model):
         assert self.actual_batch_size >= 1, "Need more input points initially !"
 
         self.density_estimator = density_estimator
+        self.variance_source = variance_source
+
+        if 'D' in self.features:
+            self.distance_estimator = DistanceEstimator()
+            self.distance_estimator.fit(self.train_X)
 
         self.epoch = 0
         self.loss_fn = nn.MSELoss()
@@ -75,6 +84,9 @@ class EpistemicPredictor(Model):
         self.a_predictor = networks['a_predictor']
         self.e_predictor = networks['e_predictor']
         self.f_predictor = networks['f_predictor']
+
+        required_n_features = len(features) + (self.input_dim - 1 if 'x' in features else 0)
+        assert self.e_predictor.input_layer.in_features == required_n_features, "Features don't match e network inputs"
 
         self.a_optimizer = optimizers['a_optimizer']
         self.e_optimizer = optimizers['e_optimizer']
@@ -97,36 +109,10 @@ class EpistemicPredictor(Model):
 
     def generate_fake_data(self, dataset):
         x, y, _ = dataset[:]
+        # print("generating {} fake datapoints".format(self.fake_data * len(x)))
         length = int(self.fake_data * x.size(0))
-        # ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
-
-        # sobol = SobolEngine(x.size(-1), scramble=True)
-        # pert = sobol.draw(length)
-        # X_cand = (self.bounds[1] - self.bounds[0]) * pert + self.bounds[0]
-        # Y_cand = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
-
-        X_cand = torch.empty((0, x.size(-1)))
-        Y_cand = torch.empty((0, y.size(1)))
-
-        import torch.distributions as D
-        # mix = D.Categorical(torch.ones(x.size(0), ))
-        # comp = D.Independent(D.Normal(x, .5 * torch.ones_like(x)), 1)
-        # gmm = D.MixtureSameFamily(mix, comp)
-        # ood_x = gmm.sample(torch.Size([length]))
-        # ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
-        # self.fake_data = int(self.fake_data)
-        cands = []
-        vals = []
-        for x_, y_ in zip(x, y):
-            cs = D.Normal(x_, .1 * torch.ones_like(x_)).sample(torch.Size([self.fake_data]))
-            X_cand = torch.cat([X_cand, cs])
-            for c in cs:
-                Y_cand = torch.cat([Y_cand, D.Normal(y_, .1 * torch.ones_like(y_)).sample().unsqueeze(1)])
-
-        #ood_x = torch.cat(cands)
-        #ood_y = torch.cat(vals).reshape(self.fake_data * y.size(0), y.size(1))
-        ood_x = X_cand
-        ood_y = Y_cand
+        ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
+        ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
         return TensorDataset(ood_x, ood_y, ood_y)
 
     @property
@@ -240,8 +226,19 @@ class EpistemicPredictor(Model):
         Computes uncertainty for input sample and
         returns epistemic uncertainty estimate.
         """
-        density_feature = self.density_estimator.score_samples(x.cpu()).to(self.device)
-        u_in = torch.cat((x, density_feature), dim=1)
+        u_in = []
+        if 'x' in self.features:
+            u_in.append(x)
+        if 'd' in self.features:
+            density_feature = self.density_estimator.score_samples(x.cpu()).to(self.device)
+            u_in.append(density_feature)
+        if 'D' in self.features:
+            distance_feature = self.distance_estimator.score_samples(x.cpu()).to(self.device)
+            u_in.append(distance_feature)
+        if 'v' in self.features:
+            variance_feature = self.variance_source.score_samples(x.cpu()).to(self.device)
+            u_in.append(variance_feature)
+        u_in = torch.cat(u_in, dim=1)
         return self.e_predictor(u_in)
 
     def get_prediction_with_uncertainty(self, x):
