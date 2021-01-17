@@ -6,7 +6,7 @@ from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
 from torch.utils.data import DataLoader, TensorDataset
-from uncertaintylearning.utils import get_uncertainty_estimate
+from uncertaintylearning.utils import get_dropout_uncertainty_estimate
 
 
 class MCDropout(Model):
@@ -74,7 +74,7 @@ class MCDropout(Model):
         Computes uncertainty for input sample and
         returns epistemic uncertainty estimate.
         """
-        _, std = get_uncertainty_estimate(self.f_predictor, x, num_samples=100)
+        _, std = get_dropout_uncertainty_estimate(self.f_predictor, x, num_samples=100)
         std = torch.FloatTensor(std).unsqueeze(-1)
         return std
 

@@ -1,5 +1,5 @@
 from .density_estimator import FixedKernelDensityEstimator, CVKernelDensityEstimator
-from .dropout_utils import get_uncertainty_estimate
+from .uncertainty_estimation_utils import get_dropout_uncertainty_estimate, get_ensemble_uncertainty_estimate
 from .networks import create_network, create_optimizer, create_multiplicative_scheduler, reset_weights
 
 from .test_functions import sinusoid, multi_optima, booth, levi_n13
