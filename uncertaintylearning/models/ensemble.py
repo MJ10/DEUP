@@ -6,17 +6,17 @@ from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
 from torch.utils.data import DataLoader, TensorDataset
-from uncertaintylearning.utils import get_dropout_uncertainty_estimate
+from uncertaintylearning.utils import get_ensemble_uncertainty_estimate
 
 
-class MCDropout(Model):
+class Ensemble(Model):
     def __init__(self, train_X, train_Y,
-                 network,
-                 optimizer,
-                 scheduler=None,
+                 networks,
+                 optimizers,
+                 schedulers=None,
                  batch_size=16,
-                 device=torch.device("cpu")):
-        super(MCDropout, self).__init__()
+                 device=torch.device("cpu")):  # For now, the code runs on CPU only, `.to(self.device)` should be added!
+        super(Ensemble, self).__init__()
         self.train_X = train_X
         self.train_Y = train_Y
 
@@ -28,18 +28,15 @@ class MCDropout(Model):
         self.epoch = 0
         self.loss_fn = nn.MSELoss()
 
-        self.f_predictor = network
+        self.f_predictors = networks
         self.device = device
-
-        self.f_optimizer = optimizer
+        self.f_optimizers = optimizers
 
         self.actual_batch_size = min(batch_size, len(self.train_X) // 2)
 
-        # For now, the only implemented version uses self.scheduler = None.
-        # The code should be revisited if we want a scheduler
-        self.scheduler = scheduler
-        if scheduler is None:
-            self.scheduler = {}
+        self.schedulers = schedulers
+        if schedulers is None:
+            self.schedulers = {}
 
     @property
     def num_outputs(self):
@@ -54,17 +51,17 @@ class MCDropout(Model):
         data = TensorDataset(self.train_X, self.train_Y)
 
         loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
-        for batch_id, (xi, yi) in enumerate(loader):
-            xi = xi.to(self.device)
-            yi = yi.to(self.device)
-            self.f_optimizer.zero_grad()
-            y_hat = self.f_predictor(xi)
-            f_loss = self.loss_fn(y_hat, yi)
-            f_loss.backward()
-            self.f_optimizer.step()
+        for (predictor, optimizer) in zip(self.f_predictors, self.f_optimizers):
+            for batch_id, (xi, yi) in enumerate(loader):
+                xi, yi = xi.to(self.device), yi.to(self.device)
+                optimizer.zero_grad()
+                y_hat = predictor(xi)
+                f_loss = self.loss_fn(y_hat, yi)
+                f_loss.backward()
+            optimizer.step()
 
         self.epoch += 1
-        for scheduler in self.scheduler.values():
+        for scheduler in self.schedulers.values():
             scheduler.step()
 
         self.is_fitted = True
@@ -72,30 +69,28 @@ class MCDropout(Model):
             'f': f_loss.detach().item(),
         }
 
-    def _epistemic_uncertainty(self, x):
-        """
-        Computes uncertainty for input sample and
-        returns epistemic uncertainty estimate.
-        """
-        _, std = get_dropout_uncertainty_estimate(self.f_predictor, x, num_samples=100)
-        std = torch.FloatTensor(std).unsqueeze(-1)
-        return std
-
     def get_prediction_with_uncertainty(self, x):
         if not self.is_fitted:
             raise Exception('Model not fitted')
         if x.ndim == 3:
             preds = self.get_prediction_with_uncertainty(x.view(x.size(0) * x.size(1), x.size(2)))
             return preds[0].view(x.size(0), x.size(1), 1), preds[1].view(x.size(0), x.size(1), 1)
-        return self.f_predictor(x), self._epistemic_uncertainty(x)
+        return get_ensemble_uncertainty_estimate(self.f_predictors, x)
 
-    def posterior(self, x, output_indices=None, observation_noise=False):
+    def posterior(self, x):
         # this works with 1d output only
         # x should be a n x d tensor
         mvn = self.forward(x)
         return GPyTorchPosterior(mvn)
 
     def forward(self, x):
+        if x.ndim == 3:
+            assert x.size(1) == 1
+            return self.forward(x.squeeze(1))
+        means, var = self.get_prediction_with_uncertainty(x)
+        mvn = MultivariateNormal(means, var.unsqueeze(-1))
+        return mvn
+        
         # ONLY WORKS WITH 1d output !!!!!
         # When x is of shape n x d, the posterior should have mean of shape n, and covar of shape n x n (diagonal)
         # When x is of shape n x q x d, the posterior should have mean of shape n x 1, and covar of shape n x q x q ( n diagonals)
@@ -114,4 +109,4 @@ class MCDropout(Model):
                 print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
         else:
             raise NotImplementedError("Something is wrong, just cmd+f this error message and you can start debugging.")
-        return mvn  
+        return mvn
