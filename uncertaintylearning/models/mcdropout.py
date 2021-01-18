@@ -87,7 +87,11 @@ class MCDropout(Model):
         if x.ndim == 3:
             preds = self.get_prediction_with_uncertainty(x.view(x.size(0) * x.size(1), x.size(2)))
             return preds[0].view(x.size(0), x.size(1), 1), preds[1].view(x.size(0), x.size(1), 1)
-        return self.f_predictor(x), self._epistemic_uncertainty(x)
+        self.eval()
+        mean = self.f_predictor(x)
+        self.train()
+        var = self._epistemic_uncertainty(x)
+        return mean, var
 
     def posterior(self, x, output_indices=None, observation_noise=False):
         # this works with 1d output only
