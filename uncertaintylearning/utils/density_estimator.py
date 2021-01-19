@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from sklearn.neighbors import KernelDensity
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import GridSearchCV
-from .maf import MAFMOG
+from .maf import MAFMOG, MADEMOG
 
 import torch
 from torch.utils.data import DataLoader, TensorDataset
@@ -58,44 +58,35 @@ class IdentityPostprocessor:
         return values
 
 
-class MAFMOGDensityEstimator(DensityEstimator):
-    """
-    Masked Auto Regressive Flow to estimate log-probabilities, works on 2d or more
-    """
-    def __init__(self, batch_size=10, n_blocks=5, n_components=1, hidden_size=64,
-                 n_hidden=2, batch_norm=False, lr=1e-4, use_log_density=True):
+class NNDensityEstimator(DensityEstimator):
+    def __init__(self, batch_size=10, hidden_size=64, n_hidden=2, epochs=10, lr=1e-4, use_log_density=True):
         self.batch_size = batch_size
-        self.n_blocks = n_blocks
-        self.n_components = n_components
         self.hidden_size = hidden_size
         self.n_hidden = n_hidden
-        self.batch_norm = batch_norm
+        self.epochs = epochs
         self.lr = lr
-
+        self.use_log_density = use_log_density
         self.postprocessor = IdentityPostprocessor(exponentiate=not use_log_density)
 
     def fit(self, training_points):
-        self.dim = training_points.size(-1)
-        self.model = MAFMOG(self.n_blocks, self.n_components, self.dim, self.hidden_size, self.n_hidden,
-                            batch_norm=self.batch_norm)
-
+        assert self.model is not None
+        self.dataset = TensorDataset(training_points)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-6)
+        dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
 
-        ds = TensorDataset(training_points)
-        dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=True)
+        for epoch in range(self.epochs):
+            for i, data in enumerate(dataloader):
+                self.model.train()
 
-        for i, data in enumerate(dataloader):
-            self.model.train()
+                # check if labeled dataset
+                x = data[0]
+                x = x.view(x.shape[0], -1)
 
-            # check if labeled dataset
-            x = data[0]
-            x = x.view(x.shape[0], -1)
+                loss = - self.model.log_prob(x, None).mean(0)
 
-            loss = - self.model.log_prob(x, None).mean(0)
-
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
 
     def score_samples(self, test_points):
         ds = TensorDataset(test_points)
@@ -106,7 +97,46 @@ class MAFMOGDensityEstimator(DensityEstimator):
             x = data[0].view(data[0].shape[0], -1)
             logprobs.append(self.model.log_prob(x))
         logprobs = torch.cat(logprobs, dim=0)
-        return logprobs
+        values = self.postprocessor.transform(logprobs)
+        values = torch.FloatTensor(values).unsqueeze(-1)
+        assert values.ndim == 2 and values.size(0) == len(test_points)
+        return values
+
+
+class MAFMOGDensityEstimator(NNDensityEstimator):
+    """
+    Masked Auto Regressive Flow to estimate log-probabilities, works on 2d or more
+    """
+    def __init__(self, batch_size=10, n_blocks=5, n_components=1, hidden_size=64,
+                 n_hidden=2, batch_norm=False, epochs=10, lr=1e-4, use_log_density=True):
+        super().__init__(batch_size, hidden_size, n_hidden, epochs, lr, use_log_density)
+        self.n_blocks = n_blocks
+        self.n_components = n_components
+        self.batch_norm = batch_norm
+
+    def fit(self, training_points):
+        self.dim = training_points.size(-1)
+        self.model = MAFMOG(self.n_blocks, self.n_components, self.dim, self.hidden_size, self.n_hidden,
+                            batch_norm=self.batch_norm)
+
+        super().fit(training_points)
+
+
+class MADEMOGDensityEstimator(NNDensityEstimator):
+    """
+    MADE to estimate log-probabilities, works on 2d or more
+    """
+    def __init__(self, batch_size=10, n_components=1, hidden_size=64,
+                 n_hidden=2, lr=1e-4, epochs=10, use_log_density=True):
+        super().__init__(batch_size, hidden_size, n_hidden, epochs, lr, use_log_density)
+        self.n_components = n_components
+
+
+    def fit(self, training_points):
+        self.dim = training_points.size(-1)
+        self.model = MADEMOG(self.n_components, self.dim, self.hidden_size, self.n_hidden)
+
+        super().fit(training_points)
 
 
 class KernelDensityEstimator(DensityEstimator):
