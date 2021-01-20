@@ -5,8 +5,8 @@ from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
 from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.quasirandom import SobolEngine
 from uncertaintylearning.utils import DistanceEstimator
-
 
 class EpistemicPredictor(Model):
     def __init__(self, train_X, train_Y,
@@ -26,7 +26,8 @@ class EpistemicPredictor(Model):
                  features='xd',  # x for input, d for density, D for distance, v for variance
                  variance_source=None,
                  ood_X=None,
-                 ood_Y=None
+                 ood_Y=None,
+                 augmented_density=False,
                  ):
         super().__init__()
 
@@ -103,16 +104,42 @@ class EpistemicPredictor(Model):
                            torch.empty((0, self.output_dim)).to(device))
 
         self.dataloader_seed = dataloader_seed
-
+        self.augmented_density = augmented_density
 
         self.retrain = retrain
 
     def generate_fake_data(self, dataset):
         x, y, _ = dataset[:]
-        # print("generating {} fake datapoints".format(self.fake_data * len(x)))
         length = int(self.fake_data * x.size(0))
-        ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
-        ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+        # ood_x = torch.FloatTensor(length, x.size(1)).uniform_(*self.bounds).to(self.device)
+
+        sobol = SobolEngine(x.size(-1), scramble=True)
+        pert = sobol.draw(length)
+        X_cand = (self.bounds[1] - self.bounds[0]) * pert + self.bounds[0]
+        Y_cand = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+        #
+        # X_cand = torch.empty((0, x.size(-1)))
+        # Y_cand = torch.empty((0, y.size(1)))
+        #
+        # import torch.distributions as D
+        # # mix = D.Categorical(torch.ones(x.size(0), ))
+        # # comp = D.Independent(D.Normal(x, .5 * torch.ones_like(x)), 1)
+        # # gmm = D.MixtureSameFamily(mix, comp)
+        # # ood_x = gmm.sample(torch.Size([length]))
+        # # ood_y = torch.FloatTensor(length, y.size(1)).uniform_(y.min().item(), y.max().item()).to(self.device)
+        # # self.fake_data = int(self.fake_data)
+        # cands = []
+        # vals = []
+        # for x_, y_ in zip(x, y):
+        #     cs = D.Normal(x_, .1 * torch.ones_like(x_)).sample(torch.Size([self.fake_data]))
+        #     X_cand = torch.cat([X_cand, cs])
+        #     for c in cs:
+        #         Y_cand = torch.cat([Y_cand, D.Normal(y_, .1 * torch.ones_like(y_)).sample().unsqueeze(1)])
+
+        #ood_x = torch.cat(cands)
+        #ood_y = torch.cat(vals).reshape(self.fake_data * y.size(0), y.size(1))
+        ood_x = X_cand
+        ood_y = Y_cand
         return TensorDataset(ood_x, ood_y, ood_y)
 
     @property
@@ -123,7 +150,18 @@ class EpistemicPredictor(Model):
         """
         Trains density estimator on input samples
         """
-        self.density_estimator.fit(x.cpu())
+        def perturb(data):
+            import torch.distributions as D
+            mix = D.Categorical(torch.ones(data.size(0), ))
+            comp = D.Independent(D.Normal(data, .3 * torch.ones_like(data)), 1)
+            gmm = D.MixtureSameFamily(mix, comp)
+            xx = gmm.sample(torch.Size([20 * data.size(0)]))
+            return xx
+
+        if self.augmented_density:
+            self.density_estimator.fit(torch.cat((x, perturb(x))).cpu())
+        else:
+            self.density_estimator.fit(x.cpu())
 
     def fit(self):
         """
