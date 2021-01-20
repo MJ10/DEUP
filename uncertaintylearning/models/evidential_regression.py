@@ -52,6 +52,7 @@ class EvidentialRegression(Model):
         return self.output_dim
 
     def get_reg_kl(self, mu1, v1, a1, b1, mu2, v2, a2, b2):
+        # TODO: Finish this implementation
         pass
 
     def loss(self, ops, y):
@@ -66,7 +67,7 @@ class EvidentialRegression(Model):
             - torch.lgamma(alpha + 0.5)
 
         if self.kl_reg:
-            kl = self.get_reg_kl(mu1, v1, a1, b1, mu2, v2, a2, b2)
+            kl = self.get_reg_kl(mu1, v1, a1, b1, mu2, v2, a2, b2) # TODO: add support for this
             reg = error * kl
         else:
             reg = error * (2 * v + alpha)
