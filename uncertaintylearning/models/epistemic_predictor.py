@@ -310,7 +310,6 @@ class EpistemicPredictor(Model):
         # When x is of shape n x q x d, the posterior should have mean of shape n x 1, and covar of shape n x q x q ( n diagonals)
 
         means, variances = self.get_prediction_with_uncertainty(x)
-
         # Sometimes the predicted variances are too low, and MultivariateNormal doesn't accept their range
 
         # TODO: maybe the two cases can be merged into one with torch.diag_embed

@@ -1,6 +1,5 @@
-from .density_estimator import (FixedKernelDensityEstimator, CVKernelDensityEstimator,
-                                DistanceEstimator, MAFMOGDensityEstimator, MADEMOGDensityEstimator)
-from .dropout_utils import get_uncertainty_estimate
+from .density_estimator import FixedKernelDensityEstimator, CVKernelDensityEstimator, MAFMOGDensityEstimator, MADEMOGDensityEstimator,
+from .uncertainty_estimation_utils import get_dropout_uncertainty_estimate, get_ensemble_uncertainty_estimate
 from .networks import create_network, create_optimizer, create_multiplicative_scheduler, reset_weights
 from .maf import MAFMOG
 
