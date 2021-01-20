@@ -40,6 +40,22 @@ class DistanceEstimator(DensityEstimator):
         return values
 
 
+class VarianceSource():
+    """
+    Variance estimator
+    """
+    def __init__(self, model, train_X, train_Y, optimizer, num_samples):
+        super().__init__()
+        self.var_model = MCDropout(train_X, train_Y, model, optimizer)
+        self.num_samples = num_samples
+
+    def fit(self, training_points):
+        self.var_model.fit(training_points)
+
+    def score_samples(self, test_points):
+        return get_uncertainty_estimate(self.var_model, test_points, self.num_samples)[1]
+
+
 class IdentityPostprocessor:
     """
     Simple class that mimics the way MinMaxScaler and other scalers work, with either identity or exp. transformations
