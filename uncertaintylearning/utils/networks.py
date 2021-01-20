@@ -26,9 +26,10 @@ class DenseNormalGamma(nn.Module):
 
         return torch.stack([gamma, nu, alpha, beta]).to(x.device)
 
-def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_output=False, dropout_prob=0.0, evidential_reg=False):
+
+def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_output=False, hidden_layers=2, dropout_prob=0.0, evidential_reg=False):
     """
-    This function instantiates and returns a 1 hidden layer NN with the corresponding parameters
+    This function instantiates and returns a NN with the corresponding parameters
     """
     if activation == 'relu':
         activation_fn = nn.ReLU
@@ -36,33 +37,19 @@ def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_
         activation_fn = nn.Tanh
     else:
         raise NotImplementedError("Only 'relu' and 'tanh' activations are supported")
-    if not evidential_reg:
-        model = nn.Sequential(OrderedDict([
-            ('input_layer', nn.Linear(input_dim, n_hidden)),
-            ('activation1', activation_fn()),
-            ('dropout1', nn.Dropout(p=dropout_prob)),
-            ('hidden_layer', nn.Linear(n_hidden, n_hidden)),
-            ('activation2', activation_fn()),
-            ('dropout2', nn.Dropout(p=dropout_prob)),
-            ('hidden_layer2', nn.Linear(n_hidden, n_hidden)),
-            ('activation3', activation_fn()),
-            ('dropout3', nn.Dropout(p=dropout_prob)),
-            ('output_layer', nn.Linear(n_hidden, output_dim))
-        ]))
+    model = nn.Sequential(OrderedDict([
+        ('input_layer', nn.Linear(input_dim, n_hidden)),
+        ('activation1', activation_fn()),
+        ('dropout1', nn.Dropout(p=dropout_prob)),
+    ]))
+    for i in range(hidden_layers):
+        model.add_module('hidden_layer{}'.format(i + 1), nn.Linear(n_hidden, n_hidden))
+        model.add_module('activation{}'.format(i + 2), activation_fn())
+        model.add_module('dropout{}'.format(i + 2), nn.Dropout(p=dropout_prob))
+    if evidential_reg:
+        model.add_module('output_layer', DenseNormalGamma(n_hidden, output_dim))
     else:
-        model = nn.Sequential(OrderedDict([
-            ('input_layer', nn.Linear(input_dim, n_hidden)),
-            ('activation1', activation_fn()),
-            ('dropout1', nn.Dropout(p=dropout_prob)),
-            ('hidden_layer', nn.Linear(n_hidden, n_hidden)),
-            ('activation2', activation_fn()),
-            ('dropout2', nn.Dropout(p=dropout_prob)),
-            ('hidden_layer2', nn.Linear(n_hidden, n_hidden)),
-            ('activation3', activation_fn()),
-            ('dropout3', nn.Dropout(p=dropout_prob)),
-            ('output_layer', DenseNormalGamma(n_hidden, output_dim))
-        ]))
-
+        model.add_module('output_layer', nn.Linear(n_hidden, output_dim))
     if positive_output:
         model.add_module('softplus', nn.Softplus())
     return model
