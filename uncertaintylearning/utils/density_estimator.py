@@ -59,14 +59,20 @@ class IdentityPostprocessor:
 
 
 class NNDensityEstimator(DensityEstimator):
-    def __init__(self, batch_size=10, hidden_size=64, n_hidden=2, epochs=10, lr=1e-4, use_log_density=True):
+    def __init__(self, batch_size=10, hidden_size=64, n_hidden=2, epochs=10, lr=1e-4,
+                 use_log_density=True, use_density_scaling=False):
         self.batch_size = batch_size
         self.hidden_size = hidden_size
         self.n_hidden = n_hidden
         self.epochs = epochs
         self.lr = lr
         self.use_log_density = use_log_density
-        self.postprocessor = IdentityPostprocessor(exponentiate=not use_log_density)
+        if use_density_scaling:
+            if not use_log_density:
+                raise NotImplementedError('Cannot use kernel estimation with density scaling without logs')
+            self.postprocessor = MinMaxScaler()
+        else:
+            self.postprocessor = IdentityPostprocessor(exponentiate=not use_log_density)
 
     def fit(self, training_points):
         assert self.model is not None
@@ -88,7 +94,9 @@ class NNDensityEstimator(DensityEstimator):
                 loss.backward()
                 self.optimizer.step()
 
-    def score_samples(self, test_points):
+        self.postprocessor.fit(self.score_samples(training_points, no_preprocess=True))
+
+    def score_samples(self, test_points, no_preprocess=False):
         ds = TensorDataset(test_points)
         dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=False)
 
@@ -96,8 +104,11 @@ class NNDensityEstimator(DensityEstimator):
         for data in dataloader:
             x = data[0].view(data[0].shape[0], -1)
             logprobs.append(self.model.log_prob(x))
-        logprobs = torch.cat(logprobs, dim=0)
-        values = self.postprocessor.transform(logprobs)
+        logprobs = torch.cat(logprobs, dim=0).clamp_min(-5).detach()
+        if no_preprocess:
+            values = logprobs.numpy().ravel()
+        else:
+            values = self.postprocessor.transform(logprobs.unsqueeze(-1)).squeeze()
         values = torch.FloatTensor(values).unsqueeze(-1)
         assert values.ndim == 2 and values.size(0) == len(test_points)
         return values
@@ -108,8 +119,8 @@ class MAFMOGDensityEstimator(NNDensityEstimator):
     Masked Auto Regressive Flow to estimate log-probabilities, works on 2d or more
     """
     def __init__(self, batch_size=10, n_blocks=5, n_components=1, hidden_size=64,
-                 n_hidden=2, batch_norm=False, epochs=10, lr=1e-4, use_log_density=True):
-        super().__init__(batch_size, hidden_size, n_hidden, epochs, lr, use_log_density)
+                 n_hidden=2, batch_norm=False, epochs=10, lr=1e-4, use_log_density=True, use_density_scaling=False):
+        super().__init__(batch_size, hidden_size, n_hidden, epochs, lr, use_log_density, use_density_scaling)
         self.n_blocks = n_blocks
         self.n_components = n_components
         self.batch_norm = batch_norm
@@ -127,8 +138,8 @@ class MADEMOGDensityEstimator(NNDensityEstimator):
     MADE to estimate log-probabilities, works on 2d or more
     """
     def __init__(self, batch_size=10, n_components=1, hidden_size=64,
-                 n_hidden=2, lr=1e-4, epochs=10, use_log_density=True):
-        super().__init__(batch_size, hidden_size, n_hidden, epochs, lr, use_log_density)
+                 n_hidden=2, lr=1e-4, epochs=10, use_log_density=True, use_density_scaling=False):
+        super().__init__(batch_size, hidden_size, n_hidden, epochs, lr, use_log_density, use_density_scaling)
         self.n_components = n_components
 
 
