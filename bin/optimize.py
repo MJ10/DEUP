@@ -8,7 +8,7 @@ from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
-from uncertaintylearning.models import EpistemicPredictor, MCDropout, Ensemble
+from uncertaintylearning.models import EpistemicPredictor, MCDropout, Ensemble, EvidentialRegression
 from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDensityEstimator, functions, bounds,
                                        compute_exp_dir, log_args, log_results, create_network, create_optimizer,
                                        create_multiplicative_scheduler, reset_weights)
@@ -27,6 +27,8 @@ parser.add_argument("--initial-points", type=int, default=6,
 parser.add_argument("--gp", action="store_true", default=False,
                     help="If specified, this will run a GP-EI model")
 parser.add_argument("--mcdrop", action="store_true", default=False,
+                    help="If specified, this will run a MCDropout-EI model")
+parser.add_argument("--evidential", action="store_true", default=False,
                     help="If specified, this will run a MCDropout-EI model")
 parser.add_argument("--ensemble", action="store_true", default=False,
                     help="If specified, this will run a Ensemble-EI model")
@@ -104,6 +106,9 @@ parser.add_argument("--lengthscale", type=float,
 parser.add_argument("--tau", type=float,
                     help="tau for mcdropout")
 
+parser.add_argument("--reg_coefficient", type=float,
+                    help="regularization coefficient for evidential regression")
+
 parser.add_argument("--num_members", type=int,
                     help="number of ensemble members")
 
@@ -132,7 +137,7 @@ else:
     Y_init_2 = None
 X_init = X_init.to(device)
 
-if not args.gp and not args.mcdrop:
+if not args.gp and not args.mcdrop and not args.evidential and not args.ensembles:
     networks = {'a_predictor': create_network(dim, 1, args.n_hidden, 'tanh', True),
                 'e_predictor': create_network(dim + 1, 1, args.n_hidden, 'relu', True),
                 'f_predictor': create_network(dim, 1, args.n_hidden, 'relu', False)
@@ -173,8 +178,20 @@ if args.mcdrop:
 if args.ensemble:
     networks = [create_network(dim, 1, args.n_hidden, 'relu', False) for _ in range(args.num_members)]
     optimizers = [create_optimizer(networks[i], args.f_lr,
+                                   output_weight_decay=args.f_owd) for i in range(args.num_members)]
+
+if args.evidential:
+    reg_coefficient = args.reg_coefficient
+    networks = {
+        'f_predictor': create_network(dim, 1, args.n_hidden, 'relu', False, evidential_reg=True)
+    }
+
+    optimizers = {
+        'f_optimizer': create_optimizer(networks['f_predictor'], args.f_lr,
                                                   weight_decay=args.f_wd,
-                                                  output_weight_decay=args.f_owd) for i in range(args.num_members)]
+                                                  output_weight_decay=args.f_owd)
+    }
+
 full_train_X = X_init
 full_train_Y = Y_init
 full_train_Y_2 = Y_init_2
@@ -205,6 +222,13 @@ for step in range(args.n_steps):
         model = model.to(device)
         if state_dict is not None:
             model.load_state_dict(state_dict)
+        for _ in range(args.epochs):
+            model.fit()
+    elif args.evidential:
+        model = EvidentialRegression(full_train_X, full_train_Y, network=networks['f_predictor'], optimizer=optimizers['f_optimizer'], batch_size=4, reg_coefficient=reg_coefficient, device=device)
+        if state_dict is not None:
+            model.load_state_dict(state_dict)
+        model = model.to(device)
         for _ in range(args.epochs):
             model.fit()
     else:
@@ -256,4 +280,3 @@ for step in range(args.n_steps):
 
     # Log results
     log_results(max_value_per_step, exp_dir)
-
