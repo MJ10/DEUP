@@ -249,5 +249,5 @@ class EpistemicPredictor(Model):
         variances = variances.squeeze(-1)
         # Sometimes the predicted variances are too low, and MultivariateNormal doesn't accept their range
         # We thus add 1e-6
-        mvn = MultivariateNormal(means, variances.unsqueeze(-1))
+        mvn = MultivariateNormal(means, variances.unsqueeze(-1) + 1e-6)
         return mvn
