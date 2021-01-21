@@ -72,12 +72,12 @@ class MCDropout(Model):
             'f': f_loss.detach().item(),
         }
 
-    def _epistemic_uncertainty(self, x):
+    def _epistemic_uncertainty(self, x, num_samples=100):
         """
         Computes uncertainty for input sample and
         returns epistemic uncertainty estimate.
         """
-        _, var = get_uncertainty_estimate(self.f_predictor, x, num_samples=100)
+        _, var = get_dropout_uncertainty_estimate(self.f_predictor, x, num_samples=num_samples)
         var = torch.FloatTensor(var).unsqueeze(-1).to(self.device)
         return var
 

@@ -3,6 +3,7 @@ from sklearn.neighbors import KernelDensity
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import GridSearchCV
 from .maf import MAFMOG, MADEMOG
+from .uncertainty_estimation_utils import get_dropout_uncertainty_estimate
 
 import torch
 from torch.utils.data import DataLoader, TensorDataset
@@ -40,20 +41,22 @@ class DistanceEstimator(DensityEstimator):
         return values
 
 
-class VarianceSource():
+class VarianceSource:
     """
     Variance estimator
     """
-    def __init__(self, model, train_X, train_Y, optimizer, num_samples):
+    def __init__(self, mcdropout_model, num_samples, epochs=10):
         super().__init__()
-        self.var_model = MCDropout(train_X, train_Y, model, optimizer)
+        self.var_model = mcdropout_model
         self.num_samples = num_samples
+        self.epochs = epochs
 
-    def fit(self, training_points):
-        self.var_model.fit(training_points)
+    def fit(self, training_points=None):
+        for epoch in range(self.epochs):
+            self.var_model.fit()
 
     def score_samples(self, test_points):
-        return get_uncertainty_estimate(self.var_model, test_points, self.num_samples)[1]
+        return self.var_model._epistemic_uncertainty(test_points, num_samples=self.num_samples)
 
 
 class IdentityPostprocessor:
