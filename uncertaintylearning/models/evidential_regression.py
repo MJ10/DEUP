@@ -10,8 +10,8 @@ from torch.utils.data import DataLoader, TensorDataset
 
 class EvidentialRegression(Model):
     def __init__(self, train_X, train_Y,
-            network,  # dict with keys 'a_predictor', 'e_predictor' and 'f_predictor'
-            optimizer,  # dict with keys 'a_optimizer', 'e_optimizer' and 'f_optimizer'
+            network,
+            optimizer,
             scheduler=None,
             batch_size=16,
             reg_coefficient=1,
@@ -51,17 +51,23 @@ class EvidentialRegression(Model):
     def num_outputs(self):
         return self.output_dim
 
+    def get_reg_kl(self, mu1, v1, a1, b1, mu2, v2, a2, b2):
+        # TODO: Finish this implementation
+        pass
+
     def loss(self, ops, y):
         alpha, beta, gamma, v = ops
         twoBlambda = 2 * beta * (1 + v)
         error = torch.abs(y - gamma)
+
         nll = 0.5 * torch.log(np.pi / v) \
             - alpha * torch.log(twoBlambda) \
             + (alpha + 0.5) * torch.log(v * (y - gamma) ** 2 + twoBlambda) \
             + torch.lgamma(alpha) \
             - torch.lgamma(alpha + 0.5)
+
         if self.kl_reg:
-            kl = self.get_reg_kl(mu1, v1, a1, b1, mu2, v2, a2, b2)
+            kl = self.get_reg_kl(mu1, v1, a1, b1, mu2, v2, a2, b2) # TODO: add support for this
             reg = error * kl
         else:
             reg = error * (2 * v + alpha)
@@ -93,14 +99,13 @@ class EvidentialRegression(Model):
     
     def get_outputs(self, x):
         x = x.to(self.device)
-        ops = self.f_predictor(x)
-        logalpha, logbeta, gamma, logv = ops[:, 0], ops[:, 1], ops[:, 2], ops[:, 3]
-        v = self.evidence(logv)
-        alpha = self.evidence(logalpha) + 1
-        beta = self.evidence(logbeta)
+        gamma, v, alpha, beta = self.f_predictor(x)
         return alpha, beta, gamma, v
 
     def get_prediction_with_uncertainty(self, x):
+        if x.ndim == 3:
+            preds = self.get_prediction_with_uncertainty(x.view(x.size(0) * x.size(1), x.size(2)))
+            return preds[0].view(x.size(0), x.size(1), 1), preds[1].view(x.size(0), x.size(1), 1)
         alpha, beta, gamma, v = self.get_outputs(x)
         mean = gamma
         var = beta / (v  * (alpha - 1))
@@ -113,10 +118,29 @@ class EvidentialRegression(Model):
         return GPyTorchPosterior(mvn)
 
     def forward(self, x):
-        if x.ndim == 3:
-            assert x.size(1) == 1
-            return self.forward(x.squeeze(1))
-        means, var = self.get_prediction_with_uncertainty(x)
-        # variances = std ** 2
-        mvn = Normal(means.cpu(), var.cpu())
+        # ONLY WORKS WITH 1d output !!!!!
+        # When x is of shape n x d, the posterior should have mean of shape n, and covar of shape n x n (diagonal)
+        # When x is of shape n x q x d, the posterior should have mean of shape n x 1, and covar of shape n x q x q ( n diagonals)
+        means, variances = self.get_prediction_with_uncertainty(x)
+
+        # Sometimes the predicted variances are too low, and MultivariateNormal doesn't accept their range
+        # TODO: maybe the two cases can be merged into one with torch.diag_embed
+        if means.ndim == 2:
+            mvn = MultivariateNormal(means.squeeze(), torch.diag(variances.squeeze() + 1e-6))
+        elif means.ndim == 3:
+            assert means.size(-1) == variances.size(-1) == 1
+            try:
+                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+            except RuntimeError:
+                print('RuntimeError')
+                print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+        else:
+            raise NotImplementedError("Something is wrong, just cmd+f this error message and you can start debugging.")
         return mvn
+
+        # if x.ndim == 3:
+        #     assert x.size(1) == 1
+        #     return self.forward(x.squeeze(1))
+        # means, var = self.get_prediction_with_uncertainty(x)
+        # mvn = MultivariateNormal(means.cpu(), var.unsqueeze(-1).cpu())
+        # return mvn

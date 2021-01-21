@@ -2,13 +2,14 @@ import warnings
 from argparse import ArgumentParser
 import numpy as np
 import torch
-from botorch.acquisition import ExpectedImprovement
+from botorch.acquisition import ExpectedImprovement, qExpectedImprovement
 from botorch.fit import fit_gpytorch_model
 from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
+from botorch.generation.sampling import MaxPosteriorSampling
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
-from uncertaintylearning.models import EpistemicPredictor, MCDropout, Ensemble
+from uncertaintylearning.models import EpistemicPredictor, MCDropout, Ensemble, EvidentialRegression
 from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDensityEstimator, functions, bounds,
                                        compute_exp_dir, log_args, log_results, create_network, create_optimizer,
                                        create_multiplicative_scheduler, reset_weights)
@@ -28,6 +29,8 @@ parser.add_argument("--gp", action="store_true", default=False,
                     help="If specified, this will run a GP-EI model")
 parser.add_argument("--mcdrop", action="store_true", default=False,
                     help="If specified, this will run a MCDropout-EI model")
+parser.add_argument("--evidential", action="store_true", default=False,
+                    help="If specified, this will run a MCDropout-EI model")
 parser.add_argument("--ensemble", action="store_true", default=False,
                     help="If specified, this will run a Ensemble-EI model")
 parser.add_argument("--seed", type=int, default=0,
@@ -36,6 +39,12 @@ parser.add_argument("--noise", type=float, default=0.,
                     help="standard deviation of gaussian noise added to deterministic objective")
 parser.add_argument("--no-cuda", action="store_true", default=False,
                     help="If specified, CPU is used even if CUDA is available")
+
+# Arguments for acquisition function
+parser.add_argument("--acquisition", default='EI',
+                    help="EI or TS")
+parser.add_argument("--q", type=int, default=1,
+                    help="Number of candidates considered jointly")
 
 # Arguments specific to EP
 parser.add_argument("--epochs", type=int, default=15,
@@ -104,6 +113,9 @@ parser.add_argument("--lengthscale", type=float,
 parser.add_argument("--tau", type=float,
                     help="tau for mcdropout")
 
+parser.add_argument("--reg_coefficient", type=float,
+                    help="regularization coefficient for evidential regression")
+
 parser.add_argument("--num_members", type=int,
                     help="number of ensemble members")
 
@@ -120,7 +132,7 @@ device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda e
 
 function = functions[args.function]
 
-dim, bounds = bounds[args.function]  # Bounds of the corresponding hypercube
+dim, bounds = bounds[args.function]  # Bounds of the corresponding hyperrectangle
 
 if args.seed != 0:
     torch.manual_seed(args.seed)
@@ -132,7 +144,7 @@ else:
     Y_init_2 = None
 X_init = X_init.to(device)
 
-if not args.gp and not args.mcdrop:
+if not args.gp and not args.mcdrop and not args.evidential and not args.ensembles:
     networks = {'a_predictor': create_network(dim, 1, args.n_hidden, 'tanh', True),
                 'e_predictor': create_network(dim + 1, 1, args.n_hidden, 'relu', True),
                 'f_predictor': create_network(dim, 1, args.n_hidden, 'relu', False)
@@ -178,8 +190,20 @@ if args.mcdrop:
 if args.ensemble:
     networks = [create_network(dim, 1, args.n_hidden, 'relu', False) for _ in range(args.num_members)]
     optimizers = [create_optimizer(networks[i], args.f_lr,
+                                   output_weight_decay=args.f_owd) for i in range(args.num_members)]
+
+if args.evidential:
+    reg_coefficient = args.reg_coefficient
+    networks = {
+        'f_predictor': create_network(dim, 1, args.n_hidden, 'relu', False, evidential_reg=True)
+    }
+
+    optimizers = {
+        'f_optimizer': create_optimizer(networks['f_predictor'], args.f_lr,
                                                   weight_decay=args.f_wd,
-                                                  output_weight_decay=args.f_owd) for i in range(args.num_members)]
+                                                  output_weight_decay=args.f_owd)
+    }
+
 full_train_X = X_init
 full_train_Y = Y_init
 full_train_Y_2 = Y_init_2
@@ -200,6 +224,7 @@ for step in range(args.n_steps):
                                                                             output_weight_decay=None)
         model = MCDropout(full_train_X, full_train_Y, network=networks['f_predictor'], optimizer=optimizers['f_optimizer'], batch_size=args.batch_size, device=device)
         model = model.to(device)
+        model = MCDropout(full_train_X, full_train_Y, network=networks['f_predictor'], optimizer=optimizers['f_optimizer'], batch_size=args.batch_size)
         if state_dict is not None:
             model.load_state_dict(state_dict)
         for _ in range(args.epochs):
@@ -211,12 +236,25 @@ for step in range(args.n_steps):
             model.load_state_dict(state_dict)
         for _ in range(args.epochs):
             model.fit()
+    elif args.evidential:
+        model = EvidentialRegression(full_train_X, full_train_Y, network=networks['f_predictor'], optimizer=optimizers['f_optimizer'], batch_size=4, reg_coefficient=reg_coefficient, device=device)
+        if state_dict is not None:
+            model.load_state_dict(state_dict)
+        model = model.to(device)
+        for _ in range(args.epochs):
+            model.fit()
     else:
         if args.cv_kernel:
             density_estimator = CVKernelDensityEstimator(not args.use_exp_log_density, args.use_density_scaling)
         else:
             density_estimator = FixedKernelDensityEstimator(args.kernel, args.bandwidth, not args.use_exp_log_density,
                                                             args.use_density_scaling)
+        iid_ratio = args.iid_ratio
+        # This looks like an ugly hack
+        # TODO: maybe it would make more sense to decay the iid_ratio to 1 instead of a sudden change
+        # TODO: investigate whether it makes sense to not use fake data at all if we have many datapoints already
+        if iid_ratio > 1 and full_train_Y.size(0) > 100:
+            iid_ratio = 1
         model = EpistemicPredictor(train_X=full_train_X,
                                    train_Y=full_train_Y,
                                    networks=networks,
@@ -227,7 +265,7 @@ for step in range(args.n_steps):
                                    split_seed=args.split_seed,
                                    a_frequency=args.a_frequency,
                                    batch_size=args.batch_size,
-                                   iid_ratio=args.iid_ratio,
+                                   iid_ratio=iid_ratio,
                                    dataloader_seed=args.dataloader_seed,
                                    device=device,
                                    retrain=args.retrain,
@@ -243,21 +281,30 @@ for step in range(args.n_steps):
             a_losses.append(np.mean(losses['a']))
             e_losses.append(np.mean(losses['e']))
 
-    EI = ExpectedImprovement(model, full_train_Y.max().item())
-    bounds_t = torch.FloatTensor([[bounds[0]] * dim, [bounds[1]] * dim]).to(device)
-    candidate, acq_value = optimize_acqf(
-        EI, bounds=bounds_t, q=1, num_restarts=5, raw_samples=50,
-    )
+    if args.acquisition == 'EI':
+        acquisition = ExpectedImprovement if args.q == 1 else qExpectedImprovement
+        acq = acquisition(model, full_train_Y.max().item())
+        bounds_t = torch.FloatTensor([[bounds[0]] * dim, [bounds[1]] * dim]).to(device)
+        candidate, acq_value = optimize_acqf(
+            acq, bounds=bounds_t, q=args.q, num_restarts=5, raw_samples=50,
+        )
+    elif args.acquisition == 'TS':
+        sobol = torch.quasirandom.SobolEngine(dim, scramble=True)
+        n_candidates = min(5000, max(2000, 200 * dim))
+        pert = sobol.draw(n_candidates)
+        X_cand = (bounds[1] - bounds[0]) * pert + bounds[0]
+        thompson_sampling = MaxPosteriorSampling(model=model, replacement=False)
+        candidate = thompson_sampling(X_cand.to(device), num_samples=args.q).to(device)
+    else:
+        raise NotImplementedError("Only EI and TS are supported")
     full_train_X = torch.cat([full_train_X, candidate])
     full_train_Y = torch.cat([full_train_Y, function(candidate.cpu(), args.noise).to(device)])
     if full_train_Y_2 is not None:
         full_train_Y_2 = torch.cat([full_train_Y_2, function(candidate.cpu(), args.noise).to(device)])
 
-    # TODO: check the effect of loading state dict VS retraining from scratch
     state_dict = model.state_dict()
     max_value_per_step.append(full_train_Y.max().item())
     print(max_value_per_step)
 
     # Log results
     log_results(max_value_per_step, exp_dir)
-

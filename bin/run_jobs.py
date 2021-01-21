@@ -7,55 +7,65 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--cmd-prefix', type=str, default='',
                     help='prefix to add to each run, can be slurm specific e.g.')
+parser.add_argument('--no-gp', action="store_true", default=False,
+                    help="If specified, only EP jobs are run.")
 args = parser.parse_args()
 
-n_steps = 100
-# First GP with 10 seeds
+# Just comment out the functions you don't want to try
 functions = [
-    'multi_optima',
-    'levi_n13',
-    'booth',
-    'sinusoid'
+    # ('multi_optima', 100),
+    # ('levi_n13', 100),
+    # ('booth', 100),
+    # ('sinusoid', 100),
+    ('ackley10', 500)
 ]
-seeds = list(range(1, 11))
-noises = [0, 0.1]
+
+seeds = list(range(3))
+noises = [0]  # , 0.1]
+
+qs = (1, 4, 10)
 
 search_space = list(itertools.product(functions, seeds, noises))
 
-for function, seed, noise in search_space:
-    cl = f"""python optimize.py --gp --n-steps {n_steps} \\
-             --seed {seed} --function {function} --noise {noise}
-    """
+# First, GP
+if not args.no_gp:
+    for function, seed, noise in search_space:
+        function, n_steps = function
+        cl = f"""python optimize.py --gp --n-steps {n_steps} \\
+                 --seed {seed} --function {function} --noise {noise}
+        """
 
-    cl = args.cmd_prefix + cl
-    print("Execute:")
-    print("--------")
-    print(cl)
-    try:
-        return_val = subprocess.check_output(cl, shell=True)
-    except Exception:
-        pass
-    exit
+        cl = args.cmd_prefix + cl
+        print("Execute:")
+        print("--------")
+        print(cl)
+        try:
+            return_val = subprocess.check_output(cl, shell=True)
+        except Exception:
+            pass
+        exit
 
-# Now EP
-iid_ratio = 10
+# Now, EP
+iid_ratios = (.5, 1, 5, 10)
 batch_size = 64
 epochs = 50
 
-# bandwidths, kernels, elrs)
 
-for function, seed, noise, in search_space:
-    cl = f"""python optimize.py --n-steps {n_steps} \\
-             --seed {seed} --function {function} --noise {noise} \\
-             --epochs {epochs} --batch_size {batch_size} --iid-ratio {iid_ratio} 
-    """
+for function, seed, noise in search_space:
+    function, n_steps = function
+    for iid_ratio in iid_ratios:
+        for q in qs:
+            cl = f"""python optimize.py --n-steps {n_steps} --acquisition TS\\
+                     --seed {seed} --function {function} --noise {noise} \\
+                     --epochs {epochs} --batch_size {batch_size} --iid-ratio {iid_ratio} --q {q}
+            """
 
-    cl = args.cmd_prefix + cl
-    print("Execute:")
-    print("--------")
-    print(cl)
-    try:
-        return_val = subprocess.check_output(cl, shell=True)
-    except Exception:
-        pass
-    exit
+            cl = args.cmd_prefix + cl
+            print("Execute:")
+            print("--------")
+            print(cl)
+            try:
+                return_val = subprocess.check_output(cl, shell=True)
+            except Exception:
+                pass
+            exit
