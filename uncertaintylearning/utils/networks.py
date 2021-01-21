@@ -33,6 +33,34 @@ def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_
     return model
 
 
+def create_conv_network(output_dim, activation, positive_output=False, dropout_prob=0.0):
+    if activation == 'relu':
+        activation_fn = nn.ReLU
+    elif activation == 'tanh':
+        activation_fn = nn.Tanh
+    else:
+        raise NotImplementedError("Only 'relu' and 'tanh' activations are supported")
+    model = nn.Sequential(OrderedDict([
+        ('conv1', nn.Conv2d(3, 6, 5)),
+        ('activation1', activation_fn()),
+        ('dropout1', nn.Dropout(p=dropout_prob)),
+        ('conv2', nn.Conv2d(6, 16, 5)),
+        ('activation2', activation_fn()),
+        ('dropout2', nn.Dropout(p=dropout_prob)),
+        ('flatten', nn.Flatten()),
+        ('fc1', nn.Linear(120, 84)),
+        ('activation3', activation_fn()),
+        ('dropout3', nn.Dropout(p=dropout_prob)),
+        ('output_layer', nn.Linear(84, num_outputs)),
+        # ('activation4', activation_fn()),
+        # ('dropout4', nn.Dropout(p=dropout_prob)),
+        # ('output_layer', nn.Linear(n_hidden, output_dim))
+    ]))
+
+    if positive_output:
+        model.add_module('softplus', nn.Softplus())
+    return model
+
 def create_optimizer(network, lr, weight_decay=0, output_weight_decay=None):
     """
     This function instantiates and returns optimizer objects of the input neural network
