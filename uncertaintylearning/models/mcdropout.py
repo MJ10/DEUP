@@ -77,15 +77,9 @@ class MCDropout(Model):
         Computes uncertainty for input sample and
         returns epistemic uncertainty estimate.
         """
-<<<<<<< HEAD
-        _, std = get_dropout_uncertainty_estimate(self.f_predictor, x, num_samples=100)
-        std = torch.FloatTensor(std).unsqueeze(-1)
-        return std
-=======
         _, var = get_dropout_uncertainty_estimate(self.f_predictor, x, num_samples=num_samples)
         var = torch.FloatTensor(var).unsqueeze(-1).to(self.device)
         return var
->>>>>>> e6e64e91e094aa7778b3dc07f5d2b4a143f3a552
 
     def get_prediction_with_uncertainty(self, x):
         if not self.is_fitted:
