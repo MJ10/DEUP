@@ -1,38 +1,42 @@
 from matplotlib import pyplot as plt
 import numpy as np
 import torch
-from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDensityEstimator,
+import torch.nn as nn
+from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDensityEstimator, MAFMOGDensityEstimator,
                                        create_network, create_optimizer, create_multiplicative_scheduler, create_wrapped_network)
 from uncertaintylearning.models import DEUP
+import torch.optim as optim
+import torchvision 
+import torchvision.transforms as transforms
 
-from torchvision import datasets, models, transforms as T
-
-device=torch.device("cuda" if torch.cuda.is_cuda() else "cpu")
+device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 transform = transforms.Compose(
     [transforms.ToTensor(),
      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
+trainset = torchvision.datasets.CIFAR10(root='/network/tmp1/moksh.jain/data', train=True,
                                         download=True, transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=4,
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=256,
                                           shuffle=True, num_workers=2)
 
-iid_testset = torchvision.datasets.CIFAR10(root='./data', train=False,
+iid_testset = torchvision.datasets.CIFAR10(root='/network/tmp1/moksh.jain/data', train=False,
                                        download=True, transform=transform)
-iid_testloader = torch.utils.data.DataLoader(testset, batch_size=4,
+iid_testloader = torch.utils.data.DataLoader(iid_testset, batch_size=128,
                                          shuffle=False, num_workers=2)
 
-oodset = torchvision.datasets.SVHN(root='./data', train=False,
-                                       download=True, transform=transform)
-oodloader = torch.utils.data.DataLoader(testset, batch_size=4,
+oodset = torchvision.datasets.SVHN(root='/network/tmp1/moksh.jain/data', split='test',
+                                         download=True, transform=transform)
+oodloader = torch.utils.data.DataLoader(oodset, batch_size=64,
                                          shuffle=False, num_workers=2)
 
-testset = torchvision.datasets.ImageNet(root='./data', train=False,
-                                       download=True, transform=transform)
-testloader = torch.utils.data.DataLoader(testset, batch_size=4,
-                                         shuffle=False, num_workers=2)
+# testset = torchvision.datasets.CIFAR100(root='/network/tmp1/moksh.jain/data', train=False,
+#                                        download=True, transform=transform)
+# testloader = torch.utils.data.DataLoader(testset, batch_size=4,
+#                                          shuffle=False, num_workers=2)
 
+density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=256, n_blocks=5, lr=1e-4, use_log_density=True, use_density_scaling=True)
+# density_estimator.fit(trainset, device)
 
 networks = {
             'a_predictor': create_network(1, 1, 32, 'relu', True),
@@ -42,16 +46,14 @@ networks = {
 
 optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], 1e-2),
               'e_optimizer': create_optimizer(networks['e_predictor'], 3e-3),
-              'f_optimizer': create_optimizer(networks['f_predictor'], 1e-3)
+              # 'f_optimizer': create_optimizer(networks['f_predictor'], 1e-3)
+              'f_optimizer': optim.Adam(networks['f_predictor'].parameters(), 1e-3)
               }
 
 data = {
     'train_loader': trainloader,
     'ood_loader': oodloader
 }
-
-density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=64, n_blocks=5, lr=1e-4, use_log_density=True, use_density_scaling=True)
-density_estimator.fit(trainset, device)
 
 model = DEUP(data=data,
             networks=networks,
@@ -60,14 +62,14 @@ model = DEUP(data=data,
             features='d',
             device=device,
             use_dataloaders=True,
-            loss_fn=nn.BCELoss(reduction='sum'),
-            batch_size=64
+            loss_fn=nn.BCELoss(reduction='none'),
+            batch_size=128
             )
 
 model = model.to(device)
 
 epochs = 100
 
-new_losses = model.fit(epochs=epochs)
+new_losses = model.fit(epochs=epochs, val_loader=iid_testloader)
 for key in 'afe':
     losses[key].extend(new_losses[key])

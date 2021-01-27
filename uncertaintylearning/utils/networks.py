@@ -31,12 +31,12 @@ class DenseNormalGamma(nn.Module):
 def create_wrapped_network(name, num_classes):
     model = None
     if name == "resnet50":
-        model = models.resnet50(pretrained=True, num_classes=10)
+        model = models.resnet50(pretrained=True)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
     else:
         raise NotImplementedError("Only 'relu' and 'tanh' activations are supported")
 
-    return nn.Sequential(model, nn.LogSoftMax())
+    return nn.Sequential(model, nn.Sigmoid())
 
 def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_output=False, hidden_layers=2, dropout_prob=0.0, evidential_reg=False):
     """

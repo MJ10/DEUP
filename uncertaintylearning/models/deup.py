@@ -3,13 +3,19 @@ import torch.nn as nn
 from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
+from tqdm import tqdm
 
 from torch.utils.data import DataLoader, TensorDataset, random_split
 from torch.quasirandom import SobolEngine
 from uncertaintylearning.utils import DistanceEstimator
 
+def to_one_hot(y, c=10):
+    label = torch.FloatTensor(y.size(0), c).zero_()
+    label = label.scatter(1, y.view(-1, 1), 1)
+    return label
+
 class DEUP(Model):
-    def __init__(self, 
+    def __init__(self,
                  data,
                  networks,  # dict with keys 'a_predictor', 'e_predictor' and 'f_predictor'
                  optimizers,  # dict with keys 'a_optimizer', 'e_optimizer' and 'f_optimizer'
@@ -49,7 +55,7 @@ class DEUP(Model):
 
             generator = torch.Generator().manual_seed(split_seed)
 
-            
+
             if 'train_Y_2' in data.keys():
                 self.train_Y_2 = data['train_Y_2']
                 self.estimate_aleatoric = True
@@ -59,7 +65,7 @@ class DEUP(Model):
 
             dataset = TensorDataset(train_X, train_Y, self.train_Y_2)
             self.fake_data = iid_ratio if iid_ratio >= 1 else 0
-    
+
             if 'ood_X' not in data.keys():
                 if self.fake_data > 0:
                     train = dataset
@@ -73,15 +79,14 @@ class DEUP(Model):
                 ood_Y = torch.cat([data['ood_Y'], train_Y], dim=0)
                 ood = TensorDataset(ood_X, ood_Y, ood_Y)
                 self.fake_data = 0
-        
+
             self.train_X, self.train_Y, self.train_Y_2 = train[:]
             self.ood_X, self.ood_Y, _ = ood[:]
 
 
+            self.input_dim = train_X.size(1)
+            self.output_dim = train_Y.size(1)
         self.is_fitted = False
-
-        self.input_dim = train_X.size(1)
-        self.output_dim = train_Y.size(1)
 
         self.a_frequency = a_frequency
         # self.actual_batch_size = min(batch_size, len(self.train_X) // 2)
@@ -113,11 +118,11 @@ class DEUP(Model):
         if schedulers is None:
             self.schedulers = {}
 
-        self.data_so_far = (torch.empty((0, self.input_dim)).to(device),
-                            torch.empty((0, self.output_dim)).to(device))
+        # self.data_so_far = (torch.empty((0, self.input_dim)).to(device),
+        #                     torch.empty((0, self.output_dim)).to(device))
 
-        self.ood_so_far = (torch.empty((0, self.input_dim)).to(device),
-                           torch.empty((0, self.output_dim)).to(device))
+        # self.ood_so_far = (torch.empty((0, self.input_dim)).to(device),
+        #                    torch.empty((0, self.output_dim)).to(device))
 
         self.dataloader_seed = dataloader_seed
         self.augmented_density = augmented_density
@@ -179,7 +184,7 @@ class DEUP(Model):
         else:
             self.density_estimator.fit(x.cpu())
 
-    def fit(self, epochs=100):
+    def fit(self, epochs=100, val_loader=None):
         """
         Update a,f,e predictors with acquired batch
         """
@@ -194,8 +199,10 @@ class DEUP(Model):
 
             torch.manual_seed(self.dataloader_seed)
             self.train_loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
-        
-        for i in range(epochs):
+
+        for i in tqdm(range(epochs)):
+            running_loss = 0.0
+            self.f_predictor.train()
             for batch_id, data in enumerate(self.train_loader):
                 if self.estimate_aleatoric:
                     xi, yi, yi_2 = data
@@ -213,12 +220,28 @@ class DEUP(Model):
                     yi = torch.cat([yi, yi_2], dim=0)
 
                 f_loss = self.train_with_batch(xi, yi)# , ood_xi, ood_yi)
-
+                running_loss += f_loss.mean()
+                if batch_id % 25 == 0:
+                    print("batch {}, loss: {}".format(batch_id, running_loss / (batch_id + 1)))
                 train_losses['f'].append(f_loss.item())
-
+            if val_loader is not None:
+                self.f_predictor.eval()
+                test_loss = 0
+                correct = 0
+                total = 0
+                with torch.no_grad():
+                    for batch_idx, (inputs, targets) in enumerate(val_loader):
+                        inputs, y = inputs.to(self.device), to_one_hot(targets).to(self.device)
+                        outputs = self.f_predictor(inputs)
+                        loss = self.loss_fn(outputs, y).sum(1).mean(0)
+                        targets= targets.to(self.device)
+                        test_loss += loss.item()
+                        _, predicted = outputs.max(1)
+                        total += targets.size(0)
+                        correct += predicted.eq(targets).sum().item()
+                acc = 100.*correct/total
+                print("Epoch: {}, test acc: {}, test loss {}".format(i, acc, test_loss / total))
             self.epoch += 1
-            if i % 50 == 0:
-                print("Epoch {}".format(i))
             for name, scheduler in self.schedulers.items():
                 if name == 'f_scheduler' or name == 'e_scheduler':
                     scheduler.step()
@@ -228,7 +251,7 @@ class DEUP(Model):
 
         self.is_fitted = True
         return train_losses
-    
+
     def get_epistemic_predictor_data(self, ood_loader):
         epistemic_x = []
         epistemic_y = []
@@ -252,18 +275,18 @@ class DEUP(Model):
                 epistemic_y.append(u_out)
             epi_x, epi_y = torch.cat(epistemic_x, dim=0), torch.cat(epistemic_y, dim=0)
         return epi_x, epi_y
-    
+
     def fit_ood(self, epochs=100):
         assert self.is_fitted, "Please train F first"
         train_losses = {'e': []}
-        
+
         if not self.use_dataloaders:
             ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
             self.ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
 
         self.epistemic_X, self.epistemic_Y = self.get_epistemic_predictor_data(self.ood_loader)
         self.epistemic_loader = DataLoader(TensorDataset(self.epistemic_X, self.epistemic_Y), shuffle=True, batch_size=32)
-        
+
         for epoch in range(epochs):
             for batch_id, (epi_x, epi_y) in enumerate(self.epistemic_loader):
                 e_loss = self.train_ood_batch(epi_x, epi_y)
@@ -292,9 +315,11 @@ class DEUP(Model):
             _ = self.train_with_batch(prev_x, prev_y, prev_ood_x, prev_ood_y)
 
     def train_with_batch(self, xi, yi):
+        xi, yi = xi.to(self.device), to_one_hot(yi).to(self.device)
+        # import pdb; pdb.set_trace();
         self.f_optimizer.zero_grad()
         y_hat = self.f_predictor(xi)
-        f_loss = self.loss_fn(y_hat, yi)
+        f_loss = self.loss_fn(y_hat, yi).sum(1).mean(0)
         f_loss.backward()
         self.f_optimizer.step()
 
