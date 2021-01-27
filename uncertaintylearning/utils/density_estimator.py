@@ -94,7 +94,7 @@ class NNDensityEstimator(DensityEstimator):
         else:
             self.postprocessor = IdentityPostprocessor(exponentiate=not use_log_density)
 
-    def fit(self, training_points, device):
+    def fit(self, training_points, device, path):
         assert self.model is not None
         try:
             self.dataset = TensorDataset(training_points)
@@ -121,12 +121,15 @@ class NNDensityEstimator(DensityEstimator):
                 self.optimizer.step()
                 if i % 25 == 0:
                     print("Iteration: {}, Loss: {}, saving model ...".format(i, epoch_loss / (i+1)))
-                    torch.save(self.model.state_dict(), "/home/mila/m/moksh.jain/icml/cifar10_mafmog.pt")
-
+        
+        torch.save(self.model.state_dict(), path)
         self.postprocessor.fit(self.score_samples(training_points, no_preprocess=True))
 
     def score_samples(self, test_points, no_preprocess=False):
-        ds = TensorDataset(test_points)
+        try: 
+            ds = TensorDataset(test_points)
+        except:
+            pass
         dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=False)
 
         logprobs = []
@@ -154,7 +157,7 @@ class MAFMOGDensityEstimator(NNDensityEstimator):
         self.n_components = n_components
         self.batch_norm = batch_norm
 
-    def fit(self, training_points, device):
+    def fit(self, training_points, device, save_path):
         try:
             self.dim = training_points.size(-1)
         except:
@@ -163,7 +166,7 @@ class MAFMOGDensityEstimator(NNDensityEstimator):
         self.model = MAFMOG(self.n_blocks, self.n_components, self.dim, self.hidden_size, self.n_hidden,
                             batch_norm=self.batch_norm)
 
-        super().fit(training_points, device)
+        super().fit(training_points, device, save_path)
 
 
 class MADEMOGDensityEstimator(NNDensityEstimator):

@@ -11,8 +11,9 @@ import torchvision.transforms as transforms
 from sklearn.metrics import roc_auc_score
 
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+base_path = "/network/tmp1/moksh.jain/models/"
 
-def test_ood(self, model, iid_loader, ood_loader):
+def test_ood(model, iid_loader, ood_loader):
     scores = []
     labels = []
     
@@ -34,63 +35,77 @@ def test_ood(self, model, iid_loader, ood_loader):
 
     print("OOD ROC AUC: {}".format(roc_auc))
 
+splits = [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)] 
+
+def get_split_dataset(split_num, dataset):
+    idx = (dataset.targets==splits[split_num][0]) | (dataset.targets==splits[split_num][1])
+    dataset.targets = dataset.targets[idx]
+    dataset.data = dataset.data[idx]
+    
+    return dataset
+
 transform = transforms.Compose(
     [transforms.ToTensor(),
-     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-
-trainset = torchvision.datasets.CIFAR10(root='/network/tmp1/moksh.jain/data', train=True,
-                                        download=True, transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=256,
-                                          shuffle=True, num_workers=2)
-
-iid_testset = torchvision.datasets.CIFAR10(root='/network/tmp1/moksh.jain/data', train=False,
-                                       download=True, transform=transform)
-iid_testloader = torch.utils.data.DataLoader(iid_testset, batch_size=128,
-                                         shuffle=False, num_workers=2)
+     transforms.Normalize([0.4914, 0.4822, 0.4465], [0.247, 0.243, 0.261])])
 
 # oodset = torchvision.datasets.SVHN(root='/network/tmp1/moksh.jain/data', split='test',
 #                                          download=True, transform=transform)
 # oodloader = torch.utils.data.DataLoader(oodset, batch_size=64,
 #                                          shuffle=False, num_workers=2)
 
-testset = torchvision.datasets.CIFAR100(root='/network/tmp1/moksh.jain/data', train=False,
-                                       download=True, transform=transform)
-testloader = torch.utils.data.DataLoader(testset, batch_size=128,
-                                         shuffle=False, num_workers=2)
+# testset = torchvision.datasets.CIFAR100(root='/network/tmp1/moksh.jain/data', train=False,
+#                                        download=True, transform=transform)
+# testloader = torch.utils.data.DataLoader(testset, batch_size=128,
+#                                          shuffle=False, num_workers=2)
 
-# Train Density estimator on train set
-density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=256, n_blocks=5, lr=1e-4, use_log_density=True, use_density_scaling=True)
-density_estimator.fit(trainset, device)
 
-networks = {
-            'a_predictor': create_network(1, 1, 32, 'relu', True),
-            'e_predictor': create_network(1, 1, 32, 'relu', True),
-            'f_predictor': create_wrapped_network("resnet50", num_classes=10)
-            }
+for split_num in range(len(splits)):
+    trainset = torchvision.datasets.CIFAR10(root='/network/tmp1/moksh.jain/data', train=True,
+                                        download=True, transform=transform)
+    trainset= get_split_dataset(split_num, trainset)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=256,
+                                            shuffle=True, num_workers=2)
 
-optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], 1e-2),
-              'e_optimizer': create_optimizer(networks['e_predictor'], 3e-3),
-              'f_optimizer': optim.Adam(networks['f_predictor'].parameters(), 1e-3)
-              }
+    iid_testset = torchvision.datasets.CIFAR10(root='/network/tmp1/moksh.jain/data', train=False,
+                                        download=True, transform=transform)
+    iid_testloader = torch.utils.data.DataLoader(iid_testset, batch_size=128,
+                                            shuffle=False, num_workers=2)
 
-data = {
-    'train_loader': trainloader,
-    'ood_loader': oodloader
-}
+    density_save_path = base_path + "mafmog_cifar_split_{}.pt".format(split_num)
+    # Train Density estimator on train set
+    density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=256, n_blocks=5, lr=1e-4, use_log_density=True, use_density_scaling=True)
+    density_estimator.fit(trainset, device, density_save_path)
 
-model = DEUP(data=data,
-            networks=networks,
-            optimizers=optimizers,
-            density_estimator=density_estimator,
-            features='d',
-            device=device,
-            use_dataloaders=True,
-            loss_fn=nn.BCELoss(reduction='none'),
-            batch_size=128
-            )
+    networks = {
+                'a_predictor': create_network(1, 1, 32, 'relu', True),
+                'e_predictor': create_network(1, 1, 32, 'relu', True),
+                'f_predictor': create_wrapped_network("resnet50", num_classes=10)
+                }
 
-model = model.to(device)
+    optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], 1e-2),
+                'e_optimizer': create_optimizer(networks['e_predictor'], 3e-3),
+                'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.001, momentum=0.9)
+                }
 
-epochs = 100
-new_losses = model.fit(epochs=epochs, val_loader=iid_testloader)
-model.fit_ood(epochs=epochs)
+    data = {
+        'train_loader': trainloader,
+        'ood_loader': oodloader
+    }
+
+    model = DEUP(data=data,
+                networks=networks,
+                optimizers=optimizers,
+                density_estimator=density_estimator,
+                features='d',
+                device=device,
+                use_dataloaders=True,
+                loss_fn=nn.BCELoss(reduction='none'),
+                batch_size=128
+                )
+
+    model = model.to(device)
+    model_save_path = base_path + "resnet_cifar_split_{}.pt".format(split_num)
+    epochs = 25
+    new_losses = model.fit(epochs=epochs, val_loader=iid_testloader)
+    torch.save(model.f_predictor, model_save_path)
+# model.fit_ood(epochs=epochs)
