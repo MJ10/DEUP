@@ -93,12 +93,12 @@ class NNDensityEstimator(DensityEstimator):
         else:
             self.postprocessor = IdentityPostprocessor(exponentiate=not use_log_density)
 
-    def fit(self, training_points):
+    def fit(self, training_points, device):
         assert self.model is not None
         self.dataset = TensorDataset(training_points)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-6)
         dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
-
+        self.model = self.model.to(device)
         for epoch in range(self.epochs):
             for i, data in enumerate(dataloader):
                 self.model.train()
@@ -106,7 +106,7 @@ class NNDensityEstimator(DensityEstimator):
                 # check if labeled dataset
                 x = data[0]
                 x = x.view(x.shape[0], -1)
-
+                x = x.to(device)
                 loss = - self.model.log_prob(x, None).mean(0)
 
                 self.optimizer.zero_grad()
@@ -144,12 +144,12 @@ class MAFMOGDensityEstimator(NNDensityEstimator):
         self.n_components = n_components
         self.batch_norm = batch_norm
 
-    def fit(self, training_points):
+    def fit(self, training_points, device):
         self.dim = training_points.size(-1)
         self.model = MAFMOG(self.n_blocks, self.n_components, self.dim, self.hidden_size, self.n_hidden,
                             batch_norm=self.batch_norm)
 
-        super().fit(training_points)
+        super().fit(training_points, device)
 
 
 class MADEMOGDensityEstimator(NNDensityEstimator):

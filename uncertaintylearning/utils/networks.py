@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.optim.lr_scheduler import MultiplicativeLR
+import torchvision.models as models
 
 from collections import OrderedDict
 
@@ -26,6 +27,16 @@ class DenseNormalGamma(nn.Module):
 
         return torch.stack([gamma, nu, alpha, beta]).to(x.device)
 
+
+def create_wrapped_network(name, num_classes):
+    model = None
+    if name == "resnet50":
+        model = models.resnet50(pretrained=True, num_classes=10)
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+    else:
+        raise NotImplementedError("Only 'relu' and 'tanh' activations are supported")
+
+    return nn.Sequential(model, nn.LogSoftMax())
 
 def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_output=False, hidden_layers=2, dropout_prob=0.0, evidential_reg=False):
     """
