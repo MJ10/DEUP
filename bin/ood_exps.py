@@ -75,7 +75,7 @@ for split_num in range(len(splits)):
 
     density_save_path = base_path + "mafmog_cifar_split_{}.pt".format(split_num)
     # Train Density estimator on train set
-    density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=256, n_blocks=5, lr=1e-4, use_log_density=True, epochs=15, use_density_scaling=True)
+    density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=1e-4, use_log_density=True, epochs=30, use_density_scaling=True)
     density_estimator.fit(trainset, device, density_save_path)
 
     networks = {
