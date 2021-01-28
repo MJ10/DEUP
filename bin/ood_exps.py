@@ -38,11 +38,12 @@ def test_ood(model, iid_loader, ood_loader):
 splits = [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)] 
 
 def get_split_dataset(split_num, dataset):
-    idx = (dataset.targets==splits[split_num][0]) | (dataset.targets==splits[split_num][1])
-    dataset.targets = dataset.targets[idx]
-    dataset.data = dataset.data[idx]
-    
-    return dataset
+    # import pdb;pdb.set_trace()
+    idx = torch.logical_or(torch.tensor(dataset.targets)==splits[split_num][0], torch.tensor(dataset.targets)==splits[split_num][1])
+    print(idx.sum())
+    # dataset.targets = dataset.targets[idx]
+    # dataset.data = dataset.data[idx]
+    return torch.utils.data.dataset.Subset(dataset, np.where(idx==0)[0])
 
 transform = transforms.Compose(
     [transforms.ToTensor(),
@@ -58,22 +59,23 @@ transform = transforms.Compose(
 # testloader = torch.utils.data.DataLoader(testset, batch_size=128,
 #                                          shuffle=False, num_workers=2)
 
+iid_testset = torchvision.datasets.CIFAR10(root='/network/tmp1/moksh.jain/data', train=False,
+                                    download=True, transform=transform)
+iid_testloader = torch.utils.data.DataLoader(iid_testset, batch_size=128,
+                                        shuffle=False, num_workers=2)
 
+dataset = torchvision.datasets.CIFAR10(root='/network/tmp1/moksh.jain/data', train=True,
+                                    download=True, transform=transform)
 for split_num in range(len(splits)):
-    trainset = torchvision.datasets.CIFAR10(root='/network/tmp1/moksh.jain/data', train=True,
-                                        download=True, transform=transform)
-    trainset= get_split_dataset(split_num, trainset)
+    print(split_num)
+    trainset = get_split_dataset(split_num, dataset)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=256,
                                             shuffle=True, num_workers=2)
 
-    iid_testset = torchvision.datasets.CIFAR10(root='/network/tmp1/moksh.jain/data', train=False,
-                                        download=True, transform=transform)
-    iid_testloader = torch.utils.data.DataLoader(iid_testset, batch_size=128,
-                                            shuffle=False, num_workers=2)
 
     density_save_path = base_path + "mafmog_cifar_split_{}.pt".format(split_num)
     # Train Density estimator on train set
-    density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=256, n_blocks=5, lr=1e-4, use_log_density=True, use_density_scaling=True)
+    density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=256, n_blocks=5, lr=1e-4, use_log_density=True, epochs=15, use_density_scaling=True)
     density_estimator.fit(trainset, device, density_save_path)
 
     networks = {
@@ -89,7 +91,7 @@ for split_num in range(len(splits)):
 
     data = {
         'train_loader': trainloader,
-        'ood_loader': oodloader
+        'ood_loader': iid_testloader
     }
 
     model = DEUP(data=data,

@@ -123,14 +123,14 @@ class NNDensityEstimator(DensityEstimator):
                     print("Iteration: {}, Loss: {}, saving model ...".format(i, epoch_loss / (i+1)))
         
         torch.save(self.model.state_dict(), path)
-        self.postprocessor.fit(self.score_samples(training_points, no_preprocess=True))
+        # self.postprocessor.fit(self.score_samples(training_points, no_preprocess=True))
 
     def score_samples(self, test_points, no_preprocess=False):
         try: 
             ds = TensorDataset(test_points)
+            dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=False)
         except:
-            pass
-        dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=False)
+            dataloader = DataLoader(test_points, batch_size=self.batch_size, shuffle=False)
 
         logprobs = []
         for data in dataloader:
