@@ -78,7 +78,7 @@ for split_num in range(len(splits)):
 
     density_save_path = base_path + "mafmog_cifar_split_{}.pt".format(split_num)
     # Train Density estimator on train set
-    density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=1e-4, use_log_density=True, epochs=30, use_density_scaling=True)
+    density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=1e-4, use_log_density=True, epochs=50, use_density_scaling=True)
     density_estimator.fit(trainset, device, density_save_path)
 
     networks = {
@@ -92,7 +92,7 @@ for split_num in range(len(splits)):
                 'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
                 }
     schedulers = {
-        'f_scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
+        'f_scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(optimizers['f_optimizer'], T_max=200)
     }
     data = {
         'train_loader': trainloader,
@@ -112,7 +112,7 @@ for split_num in range(len(splits)):
 
     model = model.to(device)
     model_save_path = base_path + "resnet_cifar_split_{}.pt".format(split_num)
-    epochs = 25
+    epochs = 200
     new_losses = model.fit(epochs=epochs, val_loader=iid_testloader)
     torch.save(model.f_predictor, model_save_path)
 # model.fit_ood(epochs=epochs)

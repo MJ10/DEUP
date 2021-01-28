@@ -31,7 +31,7 @@ class DenseNormalGamma(nn.Module):
 def create_wrapped_network(name, num_classes):
     model = None
     if name == "resnet50":
-        model = models.resnet50(pretrained=True)
+        model = models.resnet50(pretrained=False)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
     else:
         raise NotImplementedError("Only 'relu' and 'tanh' activations are supported")
