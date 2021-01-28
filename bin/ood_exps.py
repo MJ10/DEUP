@@ -2,7 +2,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDensityEstimator, MAFMOGDensityEstimator,
+from uncertaintylearning.utils import (FixedKernelDensityEstimator, CVKernelDensityEstimator, MAFMOGDensityEstimator, DUQVarianceSource,
                                        create_network, create_optimizer, create_multiplicative_scheduler, create_wrapped_network)
 from uncertaintylearning.models import DEUP
 import torch.optim as optim
@@ -76,43 +76,47 @@ for split_num in range(len(splits)):
                                             shuffle=True, num_workers=2)
 
 
-    density_save_path = base_path + "mafmog_cifar_split_{}.pt".format(split_num)
-    # Train Density estimator on train set
-    density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=1e-4, use_log_density=True, epochs=50, use_density_scaling=True)
-    density_estimator.fit(trainset, device, density_save_path)
+    # density_save_path = base_path + "mafmog_cifar_split_{}.pt".format(split_num)
+    # # Train Density estimator on train set
+    # density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=1e-4, use_log_density=True, epochs=50, use_density_scaling=True)
+    # density_estimator.fit(trainset, device, density_save_path)
 
-    networks = {
-                'a_predictor': create_network(1, 1, 32, 'relu', True),
-                'e_predictor': create_network(1, 1, 32, 'relu', True),
-                'f_predictor': create_wrapped_network("resnet50", num_classes=10)
-                }
+    var_save_path = base_path + "duq_cifar_split_{}.pt".format(split_num)
+    variance_source = DUQVarianceSource(32, 8, 512, 512, 0.1, 0.999, 0.5, device)
+    variance_source.fit(train_loader=trainloader, save_path=var_save_path)
 
-    optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], 1e-2),
-                'e_optimizer': create_optimizer(networks['e_predictor'], 3e-3),
-                'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
-                }
-    schedulers = {
-        'f_scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(optimizers['f_optimizer'], T_max=200)
-    }
-    data = {
-        'train_loader': trainloader,
-        'ood_loader': iid_testloader
-    }
+    # networks = {
+    #             'a_predictor': create_network(1, 1, 32, 'relu', True),
+    #             'e_predictor': create_network(1, 1, 32, 'relu', True),
+    #             'f_predictor': create_wrapped_network("resnet50", num_classes=10)
+    #             }
 
-    model = DEUP(data=data,
-                networks=networks,
-                optimizers=optimizers,
-                density_estimator=density_estimator,
-                features='d',
-                device=device,
-                use_dataloaders=True,
-                loss_fn=nn.BCELoss(reduction='none'),
-                batch_size=128
-                )
+    # optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], 1e-2),
+    #             'e_optimizer': create_optimizer(networks['e_predictor'], 3e-3),
+    #             'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+    #             }
+    # schedulers = {
+    #     'f_scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(optimizers['f_optimizer'], T_max=200)
+    # }
+    # data = {
+    #     'train_loader': trainloader,
+    #     'ood_loader': iid_testloader
+    # }
 
-    model = model.to(device)
-    model_save_path = base_path + "resnet_cifar_split_{}.pt".format(split_num)
-    epochs = 200
-    new_losses = model.fit(epochs=epochs, val_loader=iid_testloader)
-    torch.save(model.f_predictor, model_save_path)
+    # model = DEUP(data=data,
+    #             networks=networks,
+    #             optimizers=optimizers,
+    #             density_estimator=density_estimator,
+    #             features='d',
+    #             device=device,
+    #             use_dataloaders=True,
+    #             loss_fn=nn.BCELoss(reduction='none'),
+    #             batch_size=128
+    #             )
+
+    # model = model.to(device)
+    # model_save_path = base_path + "resnet_cifar_split_{}.pt".format(split_num)
+    # epochs = 200
+    # new_losses = model.fit(epochs=epochs, val_loader=iid_testloader)
+    # torch.save(model.f_predictor, model_save_path)
 # model.fit_ood(epochs=epochs)
