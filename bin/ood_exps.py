@@ -45,9 +45,12 @@ def get_split_dataset(split_num, dataset):
     # dataset.data = dataset.data[idx]
     return torch.utils.data.dataset.Subset(dataset, np.where(idx==0)[0])
 
-transform = transforms.Compose(
-    [transforms.ToTensor(),
-     transforms.Normalize([0.4914, 0.4822, 0.4465], [0.247, 0.243, 0.261])])
+transform = transforms.Compose([
+    transforms.RandomCrop(32, padding=4),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+])
 
 # oodset = torchvision.datasets.SVHN(root='/network/tmp1/moksh.jain/data', split='test',
 #                                          download=True, transform=transform)
@@ -86,9 +89,11 @@ for split_num in range(len(splits)):
 
     optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], 1e-2),
                 'e_optimizer': create_optimizer(networks['e_predictor'], 3e-3),
-                'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.001, momentum=0.9)
+                'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
                 }
-
+    schedulers = {
+        'f_scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
+    }
     data = {
         'train_loader': trainloader,
         'ood_loader': iid_testloader

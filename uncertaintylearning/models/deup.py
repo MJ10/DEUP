@@ -241,9 +241,11 @@ class DEUP(Model):
                         correct += predicted.eq(targets).sum().item()
                 acc = 100.*correct/total
                 print("Epoch: {}, test acc: {}, test loss {}".format(i, acc, test_loss / total))
+            
             self.epoch += 1
             for name, scheduler in self.schedulers.items():
                 if name == 'f_scheduler' or name == 'e_scheduler':
+                    print("lr_step")
                     scheduler.step()
 
         if self.retrain:
