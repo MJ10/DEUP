@@ -3,6 +3,7 @@ from .density_estimator import (FixedKernelDensityEstimator, CVKernelDensityEsti
 from .uncertainty_estimation_utils import get_dropout_uncertainty_estimate, get_ensemble_uncertainty_estimate
 from .networks import create_network, create_optimizer, create_multiplicative_scheduler, reset_weights, create_wrapped_network
 from .maf import MAFMOG
+from .variance_estimator import DUQVarianceSource
 
 from .test_functions import sinusoid, multi_optima, booth, levi_n13, ackley200, ackley10
 from .logging import hash_args, log_args, log_results, compute_exp_dir

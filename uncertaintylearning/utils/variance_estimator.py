@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torchvision import models
-
+from tqdm import tqdm
 from .density_estimator import VarianceSource
 
 class ResNet_DUQ(nn.Module):
@@ -94,8 +94,9 @@ class DUQVarianceSource(VarianceSource):
         self.l_gradient_penalty = l_gradient_penalty
         self.device = device
         self.model = ResNet_DUQ(input_size, num_classes, centroid_size, model_output_size, length_scale, gamma)
+        self.model.to(self.device)
         self.optimizer = torch.optim.SGD(
-            model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=weight_decay
+            model.parameters(), lr=0.05, momentum=0.9, weight_decay=5e-4
         )
 
         self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
@@ -103,9 +104,10 @@ class DUQVarianceSource(VarianceSource):
         )
     
     def fit(self, epochs=75, train_loader=None, save_path=None):
-        for epoch in range(epochs):
+        
+        for epoch in tqdm(range(epochs)):
             running_loss = 0
-            for x, y in train_loader:
+            for i, (x, y) in enumerate(train_loader):
                 self.model.train()
 
                 self.optimizer.zero_grad()
@@ -122,7 +124,7 @@ class DUQVarianceSource(VarianceSource):
 
                 if self.l_gradient_penalty > 0:
                     loss += self.l_gradient_penalty * calc_gradient_penalty(x, y_pred)
-
+                running_loss += loss.mean()
                 loss.backward()
                 self.optimizer.step()
 
@@ -131,7 +133,12 @@ class DUQVarianceSource(VarianceSource):
                 with torch.no_grad():
                     self.model.eval()
                     self.model.update_embeddings(x, y)
+                
+                if i % 50 == 0:
+                    print("Iteration: {}, Loss = {}".format(i, running_loss / (i + 1)))
+
             self.scheduler.step()
+            
         if save_path is not None:
             torch.save(self.model, save_path)
 
