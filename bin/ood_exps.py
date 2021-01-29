@@ -82,7 +82,7 @@ for split_num in range(len(splits)):
     # density_estimator.fit(trainset, device, density_save_path)
 
     var_save_path = base_path + "duq_cifar_split_{}.pt".format(split_num)
-    variance_source = DUQVarianceSource(32, 8, 512, 512, 0.1, 0.999, 0.5, device)
+    variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
     variance_source.fit(train_loader=trainloader, save_path=var_save_path)
 
     # networks = {

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision import models
 from tqdm import tqdm
 from .density_estimator import VarianceSource
@@ -66,6 +67,12 @@ class ResNet_DUQ(nn.Module):
 
         return z, y_pred
 
+def bce_loss_fn(y_pred, y, num_classes):
+    bce = F.binary_cross_entropy(y_pred, y, reduction="sum").div(
+        num_classes * y_pred.shape[0]
+    )
+    return bce
+
 def calc_gradients_input(x, y_pred):
     gradients = torch.autograd.grad(
         outputs=y_pred,
@@ -93,14 +100,15 @@ class DUQVarianceSource(VarianceSource):
     def __init__(self, input_size, num_classes, centroid_size, model_output_size, length_scale, gamma, l_gradient_penalty, device):
         self.l_gradient_penalty = l_gradient_penalty
         self.device = device
+        self.num_classes = num_classes
         self.model = ResNet_DUQ(input_size, num_classes, centroid_size, model_output_size, length_scale, gamma)
         self.model.to(self.device)
         self.optimizer = torch.optim.SGD(
-            model.parameters(), lr=0.05, momentum=0.9, weight_decay=5e-4
+            self.model.parameters(), lr=0.05, momentum=0.9, weight_decay=5e-4
         )
 
         self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer, milestones=[25, 50, 75], gamma=0.2
+            self.optimizer, milestones=[25, 50, 75], gamma=0.2
         )
     
     def fit(self, epochs=75, train_loader=None, save_path=None):
@@ -118,9 +126,9 @@ class DUQVarianceSource(VarianceSource):
                     x.requires_grad_(True)
 
                 z, y_pred = self.model(x)
-                y = F.one_hot(y, num_classes).float()
+                y = F.one_hot(y, self.num_classes).float()
 
-                loss = bce_loss_fn(y_pred, y)
+                loss = bce_loss_fn(y_pred, y, self.num_classes)
 
                 if self.l_gradient_penalty > 0:
                     loss += self.l_gradient_penalty * calc_gradient_penalty(x, y_pred)
