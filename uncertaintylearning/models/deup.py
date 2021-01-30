@@ -261,16 +261,16 @@ class DEUP(Model):
             for x, y in ood_loader:
                 u_out = (self.f_predictor(x) - y).pow(2)
                 u_in = []
-                if 'x' in self.features:
-                    u_in.append(x)
+                # if 'x' in self.features:
+                #     u_in.append(x)
                 if 'd' in self.features:
-                    density_feature = self.density_estimator.score_samples(x.cpu()).to(self.device)
+                    density_feature = self.density_estimator.score_samples(x, self.device).to(self.device)
                     u_in.append(density_feature)
                 if 'D' in self.features:
                     distance_feature = self.distance_estimator.score_samples(x.cpu()).to(self.device)
                     u_in.append(distance_feature)
                 if 'v' in self.features:
-                    variance_feature = self.variance_source.score_samples(x.cpu()).to(self.device)
+                    variance_feature = self.variance_source.score_samples(x, self.device).to(self.device)
                     u_in.append(variance_feature)
                 u_in = torch.cat(u_in, dim=1)
                 epistemic_x.append(u_in)
@@ -278,23 +278,25 @@ class DEUP(Model):
             epi_x, epi_y = torch.cat(epistemic_x, dim=0), torch.cat(epistemic_y, dim=0)
         return epi_x, epi_y
 
-    def fit_ood(self, epochs=100):
-        assert self.is_fitted, "Please train F first"
+    def fit_ood(self, epochs=100, loader=None):
+        # assert self.is_fitted, "Please train F first"
         train_losses = {'e': []}
+        # if not self.use_dataloaders:
+        #     ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
+        #     self.ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
 
-        if not self.use_dataloaders:
-            ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
-            self.ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
-
-        self.epistemic_X, self.epistemic_Y = self.get_epistemic_predictor_data(self.ood_loader)
+        self.epistemic_X, self.epistemic_Y = self.get_epistemic_predictor_data(loader)
         self.epistemic_loader = DataLoader(TensorDataset(self.epistemic_X, self.epistemic_Y), shuffle=True, batch_size=32)
 
-        for epoch in range(epochs):
+        for epoch in tqdm(range(epochs)):
+            running_loss = 0
             for batch_id, (epi_x, epi_y) in enumerate(self.epistemic_loader):
                 e_loss = self.train_ood_batch(epi_x, epi_y)
+                running_loss += e_loss.mean()
                 train_losses['e'].append(e_loss.item())
-            if epoch % 50 == 0:
-                print("Epoch {}".format(epoch))
+                if batch_id % 50 == 0:
+                    print("Iteration {}, Loss: {}".format(batch_id, running_loss / (batch_id + 1)))
+            
             for name, scheduler in self.schedulers.items():
                 if name == 'e_scheduler':
                     scheduler.step()
