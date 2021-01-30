@@ -85,7 +85,7 @@ networks = {
 
 optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], 1e-2),
             'e_optimizer': create_optimizer(networks['e_predictor'], 3e-3),
-            'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+            'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
             }
 schedulers = {
     'f_scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(optimizers['f_optimizer'], T_max=200)
@@ -100,7 +100,7 @@ model = DEUP(data=data,
             optimizers=optimizers,
             density_estimator=density_estimator,
             variance_source=variance_source,
-            features='xdv',
+            features='d',
             device=device,
             use_dataloaders=True,
             loss_fn=nn.BCELoss(reduction='none'),
@@ -109,15 +109,16 @@ model = DEUP(data=data,
 
 model = model.to(device)
 density_save_path = base_path + "mafmog_cifar_full.pt"
-density_estimator.fit(trainset, device, density_save_path)
+# density_estimator.fit(trainset, device, density_save_path)
 
 var_save_path = base_path + "duq_cifar_full.pt"
-variance_source.fit(train_loader=trainloader, save_path=var_save_path)
+# variance_source.fit(train_loader=trainloader, save_path=var_save_path)
 
 model_save_path = base_path + "resnet_cifar_full.pt"
-model.f_predictor.load_state_dict(torch.load(model_save_path))
-# epochs = 200
+
+epochs = 200
 model.fit(epochs=epochs, val_loader=iid_testloader)
+torch.save(model.f_predictor, model_save_path)
 
 # for split_num in range(len(splits)):
     # print(split_num)
