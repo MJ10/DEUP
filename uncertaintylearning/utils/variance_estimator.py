@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torchvision import models
 from tqdm import tqdm
 from .density_estimator import VarianceSource
+import numpy as np
 
 class ResNet_DUQ(nn.Module):
     def __init__(
@@ -112,7 +113,7 @@ class DUQVarianceSource(VarianceSource):
         )
     
     def fit(self, epochs=75, train_loader=None, save_path=None):
-        
+        self.model.train()
         for epoch in tqdm(range(epochs)):
             running_loss = 0
             for i, (x, y) in enumerate(train_loader):
@@ -146,9 +147,32 @@ class DUQVarianceSource(VarianceSource):
                     print("Iteration: {}, Loss = {}".format(i, running_loss / (i + 1)))
 
             self.scheduler.step()
-            
+
         if save_path is not None:
             torch.save(self.model, save_path)
 
-    def score_samples(self, loader):
-        pass
+    def score_samples(self, data=None, loader=None):
+        self.model.eval()
+
+        with torch.no_grad():
+            scores = []
+            
+            if loader is None:
+                data=data.to(self.device)
+                output = self.model(data)[1]
+                kernel_distance, pred = output.max(1)
+
+                scores.append(-kernel_distance.cpu())
+
+            else:
+                for data, target in loader:
+                    data = data.to(self.device)
+                    # target = target.cuda()
+
+                    output = self.model(data)[1]
+                    kernel_distance, pred = output.max(1)
+
+                    scores.append(-kernel_distance.cpu())
+
+        scores = torch.cat(scores, dim=0)
+        return scores

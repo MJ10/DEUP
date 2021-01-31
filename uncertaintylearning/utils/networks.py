@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.optim import Adam
 from torch.optim.lr_scheduler import MultiplicativeLR
 import torchvision.models as models
-
+import uncertaintylearning.utils.resnet as resnet
 from collections import OrderedDict
 
 class DenseNormalGamma(nn.Module):
@@ -27,6 +27,12 @@ class DenseNormalGamma(nn.Module):
 
         return torch.stack([gamma, nu, alpha, beta]).to(x.device)
 
+def create_epistemic_pred_network(name, num_outputs, positive_output, num_additional_inputs):
+    if name == "resnet18":
+        model = resnet.ResNet18(num_outputs, positive_output, num_additional_inputs)
+    elif name == "resnet50":
+        model = resnet.ResNet50(num_outputs, positive_output, num_additional_inputs)
+    return model
 
 def create_wrapped_network(name, num_classes):
     model = None

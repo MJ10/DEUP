@@ -259,7 +259,7 @@ class DEUP(Model):
         epistemic_y = []
         with torch.no_grad():
             for x, y in ood_loader:
-                u_out = (self.f_predictor(x) - y).pow(2)
+                u_out = self.loss_fn(self.f_predictor(x.to(self.device)), to_one_hot(y).to(self.device)).sum(1).view(-1, 1)
                 u_in = []
                 # if 'x' in self.features:
                 #     u_in.append(x)
@@ -270,7 +270,7 @@ class DEUP(Model):
                     distance_feature = self.distance_estimator.score_samples(x.cpu()).to(self.device)
                     u_in.append(distance_feature)
                 if 'v' in self.features:
-                    variance_feature = self.variance_source.score_samples(x, self.device).to(self.device)
+                    variance_feature = self.variance_source.score_samples(data=x).to(self.device).view(-1, 1)
                     u_in.append(variance_feature)
                 u_in = torch.cat(u_in, dim=1)
                 epistemic_x.append(u_in)
@@ -284,9 +284,10 @@ class DEUP(Model):
         # if not self.use_dataloaders:
         #     ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
         #     self.ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
-
+        self.e_predictor.train()
         self.epistemic_X, self.epistemic_Y = self.get_epistemic_predictor_data(loader)
-        self.epistemic_loader = DataLoader(TensorDataset(self.epistemic_X, self.epistemic_Y), shuffle=True, batch_size=32)
+        self.epistemic_Y = (self.epistemic_Y - self.epistemic_Y.mean()) / self.epistemic_Y.std()
+        self.epistemic_loader = DataLoader(TensorDataset(self.epistemic_X, self.epistemic_Y), shuffle=True, batch_size=128)
 
         for epoch in tqdm(range(epochs)):
             running_loss = 0
@@ -335,7 +336,10 @@ class DEUP(Model):
         # with torch.no_grad():
         #     aleatoric = self.a_predictor(ood_x)
         loss_hat = self.e_predictor(epi_x) #+ aleatoric
-        e_loss = self.loss_fn(loss_hat, epi_y)
+        e_loss = (loss_hat - epi_y).pow(2)
+        # import pdb;pdb.set_trace();
+        # print(epi_x, epi_y, loss_hat, e_loss)
+        e_loss = e_loss.mean()
         e_loss.backward()
         self.e_optimizer.step()
         return e_loss
@@ -349,13 +353,13 @@ class DEUP(Model):
         if 'x' in self.features:
             u_in.append(x)
         if 'd' in self.features:
-            density_feature = self.density_estimator.score_samples(x.cpu()).to(self.device)
+            density_feature = self.density_estimator.score_samples(x, self.device).to(self.device)
             u_in.append(density_feature)
         if 'D' in self.features:
             distance_feature = self.distance_estimator.score_samples(x.cpu()).to(self.device)
             u_in.append(distance_feature)
         if 'v' in self.features:
-            variance_feature = self.variance_source.score_samples(x.cpu()).to(self.device)
+            variance_feature = self.variance_source.score_samples(data=x).to(self.device).view(-1, 1)
             u_in.append(variance_feature)
         u_in = torch.cat(u_in, dim=1)
         return self.e_predictor(u_in)
@@ -364,8 +368,8 @@ class DEUP(Model):
         if x.ndim == 3:
             preds = self.get_prediction_with_uncertainty(x.view(x.size(0) * x.size(1), x.size(2)))
             return preds[0].view(x.size(0), x.size(1), 1), preds[1].view(x.size(0), x.size(1), 1)
-        if not self.is_fitted:
-            raise Exception('Model not fitted')
+        # if not self.is_fitted:
+        #     raise Exception('Model not fitted')
         return self.f_predictor(x), self._epistemic_uncertainty(x)
 
     def predict(self, x, return_std=False):

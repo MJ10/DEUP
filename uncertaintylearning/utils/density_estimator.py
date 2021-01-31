@@ -125,7 +125,7 @@ class NNDensityEstimator(DensityEstimator):
         torch.save(self.model.state_dict(), path)
         # self.postprocessor.fit(self.score_samples(training_points, no_preprocess=True))
 
-    def score_samples(self, test_points, no_preprocess=False):
+    def score_samples(self, test_points, device, no_preprocess=False):
         try: 
             ds = TensorDataset(test_points)
             dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=False)
@@ -134,8 +134,8 @@ class NNDensityEstimator(DensityEstimator):
 
         logprobs = []
         for data in dataloader:
-            x = data[0].view(data[0].shape[0], -1)
-            logprobs.append(self.model.log_prob(x))
+            x = data[0].view(data[0].shape[0], -1).to(device)
+            logprobs.append(self.model.log_prob(x).detach().cpu())
         logprobs = torch.cat(logprobs, dim=0).clamp_min(-5).detach()
         if no_preprocess:
             values = logprobs.numpy().ravel()
@@ -156,8 +156,10 @@ class MAFMOGDensityEstimator(NNDensityEstimator):
         self.n_blocks = n_blocks
         self.n_components = n_components
         self.batch_norm = batch_norm
+        # self.model = MAFMOG(self.n_blocks, self.n_components, self.dim, self.hidden_size, self.n_hidden,
+        #             batch_norm=self.batch_norm)
 
-    def fit(self, training_points, device, save_path):
+    def fit(self, training_points, device, save_path, init_only=False):
         try:
             self.dim = training_points.size(-1)
         except:
@@ -165,7 +167,8 @@ class MAFMOGDensityEstimator(NNDensityEstimator):
         print(self.dim)
         self.model = MAFMOG(self.n_blocks, self.n_components, self.dim, self.hidden_size, self.n_hidden,
                             batch_norm=self.batch_norm)
-
+        if init_only:
+            return
         super().fit(training_points, device, save_path)
 
 

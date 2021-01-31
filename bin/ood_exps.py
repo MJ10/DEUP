@@ -19,16 +19,16 @@ def test_ood(model, iid_loader, ood_loader):
     
     for inp, _ in iid_loader:
         with torch.no_grad():
-            _, score = model.get_prediction_with_uncertainty(inp)
+            score = model._epistemic_uncertainty(inp)
         
-        scores.extend([score.cpu().numpy().tolist()])
+        scores.extend(score.cpu().numpy().tolist())
         labels.extend([0 for _ in range(inp.size(0))])
     
     for inp, _ in ood_loader:
         with torch.no_grad():
-            _, score = model.get_prediction_with_uncertainty(inp)
+            score = model._epistemic_uncertainty(inp)
         
-        scores.extend([score.cpu().numpy().tolist()])
+        scores.extend(score.cpu().numpy().tolist())
         labels.extend([1 for _ in range(inp.size(0))])
     
     roc_auc = roc_auc_score(y_true=labels, y_score=scores)
@@ -57,6 +57,11 @@ oodset = torchvision.datasets.SVHN(root='/network/tmp1/moksh.jain/data', split='
 oodloader = torch.utils.data.DataLoader(oodset, batch_size=64,
                                          shuffle=False, num_workers=2)
 
+trainoodset = torchvision.datasets.SVHN(root='/network/tmp1/moksh.jain/data', split='train',
+                                         download=True, transform=transform)
+trainoodloader = torch.utils.data.DataLoader(oodset, batch_size=64,
+                                         shuffle=False, num_workers=2)
+
 # testset = torchvision.datasets.CIFAR100(root='/network/tmp1/moksh.jain/data', train=False,
 #                                        download=True, transform=transform)
 # testloader = torch.utils.data.DataLoader(testset, batch_size=128,
@@ -74,18 +79,19 @@ trainloader = torch.utils.data.DataLoader(trainset, batch_size=256,
                                         shuffle=True, num_workers=2)
 
 density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=1e-4, use_log_density=True, epochs=50, use_density_scaling=True)
+density_estimator.fit(trainset, device, "", init_only=True)
 variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
 
 
 networks = {
             'a_predictor': create_network(1, 1, 32, 'relu', True),
-            'e_predictor': create_network(1, 1, 32, 'relu', True),
+            'e_predictor': create_network(2, 1, 512, 'relu', False, 3),
             'f_predictor': create_wrapped_network("resnet50", num_classes=10)
             }
 
 optimizers = {'a_optimizer': create_optimizer(networks['a_predictor'], 1e-2),
-            'e_optimizer': create_optimizer(networks['e_predictor'], 3e-3),
-            'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
+            'e_optimizer': create_optimizer(networks['e_predictor'], 1e-4),
+            'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.05, momentum=0.9, weight_decay=5e-4)
             }
 schedulers = {
     'f_scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(optimizers['f_optimizer'], T_max=200)
@@ -100,7 +106,7 @@ model = DEUP(data=data,
             optimizers=optimizers,
             density_estimator=density_estimator,
             variance_source=variance_source,
-            features='d',
+            features='dv',
             device=device,
             use_dataloaders=True,
             loss_fn=nn.BCELoss(reduction='none'),
@@ -108,29 +114,36 @@ model = DEUP(data=data,
         )
 
 model = model.to(device)
-density_save_path = base_path + "mafmog_cifar_full.pt"
+# density_save_path = base_path + "mafmog_cifar_full.pt"
 # density_estimator.fit(trainset, device, density_save_path)
 
-var_save_path = base_path + "duq_cifar_full.pt"
+# var_save_path = base_path + "duq_cifar_full.pt"
 # variance_source.fit(train_loader=trainloader, save_path=var_save_path)
 
-model_save_path = base_path + "resnet_cifar_full.pt"
+# model_save_path = base_path + "resnet_cifar_full.pt"
 
-epochs = 200
-model.fit(epochs=epochs, val_loader=iid_testloader)
-torch.save(model.f_predictor, model_save_path)
+epochs = 100
+# model.fit(epochs=epochs, val_loader=iid_testloader)
+# torch.save(model.f_predictor, model_save_path)
 
-# for split_num in range(len(splits)):
-    # print(split_num)
-    # density_save_path = base_path + "mafmog_cifar_split_{}.pt".format(split_num)
+for split_num in range(len(splits)):
+    print(split_num)
+    density_save_path = base_path + "mafmog_cifar_split_{}.pt".format(split_num)
     # # Train Density estimator on train set
-    # # model.density_estimator.model.load_state_dict(torch.load(density_save_path))
+    model.density_estimator.model.load_state_dict(torch.load(density_save_path))
+    # import pdb;pdb.set_trace();
+    model.density_estimator.model.to(device)
+    model.density_estimator.postprocessor.fit(model.density_estimator.score_samples(trainset, device, no_preprocess=True))
     # density_estimator.fit(trainset, device, density_save_path)
 
-    # var_save_path = base_path + "duq_cifar_split_{}.pt".format(split_num)
+    var_save_path = base_path + "duq_cifar_split_{}.pt".format(split_num)
     # variance_source.fit(train_loader=trainloader, save_path=var_save_path)
-    # # model.variance_source.model.load_state_dict(torch.load(var_save_path))
-
-    # model_save_path = base_path + "resnet_cifar_split_{}.pt".format(split_num)
-    # model.f_predictor.load_state_dict(torch.load(model_save_path))
-    # model.fit_ood(epochs=epochs, loader=trainloader)
+    model.variance_source.model = torch.load(var_save_path)
+    model.variance_source.model.to(device)
+    # score = model.variance_source.score_samples(loader=trainloader)
+    # print(score.shape)
+    model_save_path = base_path + "resnet_cifar_split_{}.pt".format(split_num)
+    model.f_predictor = torch.load(model_save_path)
+    model.fit_ood(epochs=100, loader=trainloader)
+    # model.fit_ood(epochs=1, loader=trainoodloader)
+    test_ood(model, iid_testloader, oodloader)
