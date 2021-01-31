@@ -3,8 +3,7 @@ from sklearn.neighbors import KernelDensity
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import GridSearchCV
 from .maf import MAFMOG, MADEMOG
-from .uncertainty_estimation_utils import get_dropout_uncertainty_estimate
-
+from .smooth_kde import SmoothKDE
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
@@ -52,8 +51,11 @@ class VarianceSource:
         self.epochs = epochs
 
     def fit(self, training_points=None):
+        losses = []
         for epoch in range(self.epochs):
-            self.var_model.fit()
+            loss = self.var_model.fit()
+            losses.append(loss['f'])
+        return losses
 
     def score_samples(self, test_points):
         return self.var_model._epistemic_uncertainty(test_points, num_samples=self.num_samples)
@@ -173,7 +175,7 @@ class KernelDensityEstimator(DensityEstimator):
     """
     Base class for sklearn density estimators
     """
-    def __init__(self, use_log_density=True, use_density_scaling=False):
+    def __init__(self, use_log_density=True, use_density_scaling=False, clip_min=-50):
         self.kde = None
         if use_density_scaling:
             if not use_log_density:
@@ -181,13 +183,25 @@ class KernelDensityEstimator(DensityEstimator):
             self.postprocessor = MinMaxScaler()
         else:
             self.postprocessor = IdentityPostprocessor(exponentiate=not use_log_density)
+        self.clip_min = clip_min
 
-    def score_samples(self, test_points):
+    def fit_postprocessor_on_domain(self, domain):
+        values = self.score_samples(domain, no_postprocess=True)
+        self.postprocessor.fit(values)
+
+    def score_samples(self, test_points, no_postprocess=False):
         if isinstance(test_points, torch.Tensor) and test_points.requires_grad:
             return self.score_samples(test_points.detach())
 
-        values = self.postprocessor.transform(self.kde.score_samples(test_points))
-        values = torch.FloatTensor(values).unsqueeze(-1)
+        values = self.kde.score_samples(test_points)
+        if isinstance(self.postprocessor, MinMaxScaler):
+            values = values[:, np.newaxis]
+        if no_postprocess:
+            return values
+        values = self.postprocessor.transform(values)
+        values = torch.FloatTensor(values)
+        if not isinstance(self.postprocessor, MinMaxScaler):
+            values = values.unsqueeze(-1)
         assert values.ndim == 2 and values.size(0) == len(test_points)
         return values
 
@@ -196,13 +210,16 @@ class FixedKernelDensityEstimator(KernelDensityEstimator):
     """
     Kernel Density Estimator with fixed kernel
     """
-    def __init__(self, kernel, bandwith, use_log_density=True, use_density_scaling=False):
+    def __init__(self, kernel, bandwidth, use_log_density=True, use_density_scaling=False):
         super().__init__(use_log_density, use_density_scaling)
-        self.kde = KernelDensity(kernel=kernel, bandwidth=bandwith)
+        self.kde = KernelDensity(kernel=kernel, bandwidth=bandwidth)
 
     def fit(self, training_points):
         self.kde.fit(training_points)
-        self.postprocessor.fit(self.kde.score(training_points))
+        values = self.kde.score_samples(training_points)
+        if isinstance(self.postprocessor, MinMaxScaler):
+            values = values[:, np.newaxis]
+        self.postprocessor.fit(values)
 
 
 class CVKernelDensityEstimator(KernelDensityEstimator):
@@ -212,7 +229,11 @@ class CVKernelDensityEstimator(KernelDensityEstimator):
     def __init__(self, use_log_density=True, use_density_scaling=False):
         super().__init__(use_log_density, use_density_scaling)
         self.kde = None
-        params = {'bandwidth': np.logspace(0, 1, 20), 'kernel': ['exponential', 'tophat', 'gaussian', 'linear']}
+        params = {'bandwidth': np.logspace(-3, 2, 100), 'kernel': ['exponential',
+                                                                   # 'tophat',
+                                                                   'gaussian',
+                                                                   # 'linear',
+                                                                   ]}
         self.grid = GridSearchCV(KernelDensity(), params)
 
     def fit(self, training_points):
@@ -220,4 +241,22 @@ class CVKernelDensityEstimator(KernelDensityEstimator):
             return self.fit(training_points.detach())
         self.grid.fit(training_points)
         self.kde = self.grid.best_estimator_
-        self.postprocessor.fit(self.kde.score(training_points))
+        values = self.kde.score_samples(training_points)
+        if isinstance(self.postprocessor, MinMaxScaler):
+            values = values[:, np.newaxis]
+        self.postprocessor.fit(values)
+
+
+class FixedSmoothKernelDensityEstimator(KernelDensityEstimator):
+    """
+    Kernel Density Estimator with fixed kernel
+    """
+    def __init__(self, bandwidth, kernel='gaussian', alpha=.5, use_log_density=True, use_density_scaling=False, domain=None):
+        super().__init__(use_log_density, use_density_scaling)
+        self.kde = SmoothKDE(kernel=kernel, bandwidth=bandwidth, alpha=alpha)
+        self.domain = domain
+
+    def fit(self, training_points):
+        self.kde.fit(training_points)
+        if self.domain is not None:
+            self.fit_postprocessor_on_domain(self.domain)
