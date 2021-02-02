@@ -1,5 +1,5 @@
 import torch
-
+from gpytorch.utils.errors import NotPSDError
 
 class FeatureGenerator:
     def __init__(self, features, density_estimator=None, distance_estimator=None, variance_estimator=None,
@@ -32,7 +32,11 @@ class FeatureGenerator:
             distance_feature = self.distance_estimator.score_samples(x.cpu())
             features.append(distance_feature)
         if 'v' in self.features:
-            variance_feature = self.variance_estimator.score_samples(x.cpu())
+            try:
+                variance_feature = self.variance_estimator.score_samples(x.cpu())
+            except NotPSDError:  # covariance matrix predicted by GP is not PSD
+                print('NotPSDError, using zeros as variance feature for this step')
+                variance_feature = torch.zeros((x.size(0), 1))
             features.append(variance_feature)
         if 'b' in self.features:
             if self.training_set is not None:

@@ -5,6 +5,9 @@ from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
 
 from torch.utils.data import DataLoader, TensorDataset
+from sklearn.linear_model import LinearRegression
+from sklearn.gaussian_process import GaussianProcessRegressor
+import numpy as np
 
 
 class EpistemicPredictor(Model):
@@ -17,6 +20,9 @@ class EpistemicPredictor(Model):
                  batch_size=16,
                  dataloader_seed=1,
                  device=torch.device("cpu"),
+                 exp_pred_uncert=False,
+                 estimator='nn',
+                 **kwargs  #kwargs for estimator LinearRegression and GaussianProcessRegressor
                  ):
         super().__init__()
 
@@ -34,40 +40,51 @@ class EpistemicPredictor(Model):
         self.actual_batch_size = min(batch_size, x.size(0) // 2)
         assert self.actual_batch_size >= 1, "Need more input points initially !"
 
-        self.epoch = 0
         self.loss_fn = nn.MSELoss()
 
-        self.e_predictor = networks['e_predictor']
         self.f_predictor = networks['f_predictor']
-
-        self.e_optimizer = optimizers['e_optimizer']
         self.f_optimizer = optimizers['f_optimizer']
 
         self.dataloader_seed = dataloader_seed
         torch.manual_seed(self.dataloader_seed)
 
+        self.exp_pred_uncert = exp_pred_uncert
+
+        assert estimator in ('nn', 'linreg', 'gp')
+        self.estimator = estimator
+        if estimator == 'nn':
+            self.e_predictor = networks['e_predictor']
+            self.e_optimizer = optimizers['e_optimizer']
+        elif estimator == 'linreg':
+            self.e_predictor = LinearRegression(**kwargs)
+        elif estimator == 'gp':
+            self.e_predictor = GaussianProcessRegressor(**kwargs)
+        else:
+            raise NotImplementedError('`estimator` has to be one of `nn`, `linreg`, `gp')
+
     @property
     def num_outputs(self):
         return self.output_dim
 
-    def fit(self):
+    def fit(self, epochs=None):
         """
         Update a,f,e predictors with acquired batch
         """
-
-        self.train()
-        train_losses = []
+        if epochs is None:
+            epochs = 1
+        self.f_predictor.train()
 
         data = TensorDataset(self.x, self.y)
-
         loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
 
-        for batch_id, (xi, yi) in enumerate(loader):
-            f_loss = self.train_with_batch(xi, yi)
-
-            train_losses.append(f_loss.item())
-
-        self.epoch += 1
+        train_losses = []
+        for epoch in range(epochs):
+            epoch_losses = []
+            count = 0
+            for batch_id, (xi, yi) in enumerate(loader):
+                f_loss = self.train_with_batch(xi, yi)
+                epoch_losses.append(f_loss.item())
+            train_losses.append(np.mean(epoch_losses))
 
         self.is_fitted = True
         return train_losses
@@ -81,37 +98,56 @@ class EpistemicPredictor(Model):
 
         return f_loss
 
-    def fit_uncertainty_estimator(self, features, targets):
+    def fit_uncertainty_estimator(self, features, targets, epochs=None):
         """
         features should be a list of n x 1 tensors, and maybe one n x d tensor if the input is used as feature
         targets should be a list of n x 1 tensors (should be L2 errors made by the main predictor
         """
-        # TODO: remove our usage of list of features, and directly make features a n x something tensor
-        self.train()
+        if self.estimator != 'nn':
+            self.e_predictor.fit(features, targets)
+            train_losses = [np.mean((self.e_predictor.predict(features) - targets.numpy()) ** 2)]
+            return train_losses
+        if epochs is None:
+            epochs = 1
+
+        self.e_predictor.train()
         batch_size = min(self.actual_batch_size, targets.size(0) // 2)
         train_losses = []
         loader = DataLoader(TensorDataset(features, targets), shuffle=True, batch_size=batch_size)
-
-        for batch_id, (features_i, target_i) in enumerate(loader):
-            e_loss = self.train_uncertainty_estimator_batch(features_i, target_i)
-            train_losses.append(e_loss.item())
+        for epoch in range(epochs):
+            epoch_losses = []
+            for batch_id, (features_i, target_i) in enumerate(loader):
+                e_loss = self.train_uncertainty_estimator_batch(features_i, target_i)
+                epoch_losses.append(e_loss.item())
+            train_losses.append(np.mean(epoch_losses))
 
         return train_losses
 
     def train_uncertainty_estimator_batch(self, features_i, target_i):
         self.e_optimizer.zero_grad()
-        loss_hat = self._uncertainty(features=features_i)
+        loss_hat = self._uncertainty(features=features_i, use_raw=True)
         e_loss = self.loss_fn(loss_hat, target_i)
         e_loss.backward()
         self.e_optimizer.step()
         return e_loss
 
-    def _uncertainty(self, features=None, x=None):
+    def _uncertainty(self, features=None, x=None, use_raw=False):
         # Either compute uncertainty using features, or x, not both
         assert sum(([_ is None for _ in (features, x)])) == 1, "Exactly one of `features` and `x` shouldn't be None"
         if features is None:
             features = self.feature_generator(x)
-        return self.e_predictor(features)
+        if self.estimator == 'nn':
+            predicted_uncertainties = self.e_predictor(features)
+        else:
+            predicted_uncertainties = (torch.FloatTensor(self.e_predictor.predict(features.detach())))
+            if not self.exp_pred_uncert and not use_raw:
+                # I was using Softplus here instead of RELU, but it maps all negative values to some >0 constant, which is bad !
+                predicted_uncertainties = nn.ReLU()(predicted_uncertainties)
+            else:
+                predicted_uncertainties = predicted_uncertainties.clamp(-20, 3)
+        if self.exp_pred_uncert and not use_raw:
+            predicted_uncertainties = predicted_uncertainties.exp()
+        return predicted_uncertainties
 
     def get_prediction_with_uncertainty(self, x, features=None):
         if x.ndim == 3:
@@ -140,7 +176,7 @@ class EpistemicPredictor(Model):
         # x should be a n x d tensor
         features = None
         if 'features' in kwargs:
-            feautres = kwargs['features']
+            features = kwargs['features']
         mvn = self.forward(x, features)
         return GPyTorchPosterior(mvn)
 
