@@ -7,7 +7,8 @@ from .smooth_kde import SmoothKDE
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
-
+from gpytorch.mlls import ExactMarginalLogLikelihood
+from botorch.fit import fit_gpytorch_model
 
 class DensityEstimator(ABC):
     """
@@ -45,7 +46,6 @@ class VarianceSource:
     Variance estimator
     """
     def __init__(self, mcdropout_model, num_samples, epochs=10):
-        super().__init__()
         self.var_model = mcdropout_model
         self.num_samples = num_samples
         self.epochs = epochs
@@ -59,6 +59,38 @@ class VarianceSource:
 
     def score_samples(self, test_points):
         return self.var_model._epistemic_uncertainty(test_points, num_samples=self.num_samples)
+
+
+class GPVarianceEstimator:
+    def __init__(self, gp_model, loggify=False, use_variance_scaling=False, domain=None):
+        self.gp_model = gp_model
+        self.loggify = loggify
+        self.postprocessor = None
+        if use_variance_scaling:
+            self.postprocessor = MinMaxScaler()
+        self.domain = None if not use_variance_scaling else domain
+
+    def fit(self):
+        mll = ExactMarginalLogLikelihood(self.gp_model.likelihood, self.gp_model)
+        fit_gpytorch_model(mll)
+        if self.domain is not None:
+            self.fit_postprocessor_on_domain(self.domain)
+
+    def fit_postprocessor_on_domain(self, domain):
+        values = self.score_samples(domain, no_postprocess=True)
+        self.postprocessor.fit(values)
+
+    def score_samples(self, test_points, no_postprocess=False):
+        scores = self.gp_model(test_points).stddev.detach().unsqueeze(-1).pow(2)
+        if self.loggify:
+            scores = scores.log()
+        if no_postprocess:
+            return scores
+        if isinstance(self.postprocessor, MinMaxScaler):
+            scores = self.postprocessor.transform(scores.numpy())
+        values = torch.FloatTensor(scores)
+        assert values.ndim == 2 and values.size(0) == len(test_points)
+        return values
 
 
 class IdentityPostprocessor:
