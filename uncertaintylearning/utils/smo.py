@@ -1,5 +1,5 @@
 from .buffer import Buffer
-from .density_estimator import FixedSmoothKernelDensityEstimator, VarianceSource, DistanceEstimator, GPVarianceEstimator
+from .density_estimator import FixedSmoothKernelDensityEstimator, VarianceSource, DistanceEstimator, GPVarianceEstimator, ZeroVarianceEstimator
 from ..models.mcdropout import MCDropout
 from .density_picker import CrossValidator
 from .networks import create_optimizer, create_network
@@ -18,11 +18,18 @@ from botorch.models import SingleTaskGP
 from sklearn.linear_model import LinearRegression
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from botorch.fit import fit_gpytorch_model
+from gpytorch.utils.errors import NotPSDError
 
 
-def init_buffer(networks, X_init, Y_init, features, domain=None, epsilon=1e-5, loggify=False, repeats=2):
+def invsoftplus(x, beta=1):
+    return 1. / beta * (torch.log((beta * x).exp() - 1))
+
+
+def init_buffer(networks, X_init, Y_init, features, domain=None, epsilon=1e-5, loggify=False, repeats=2, beta=None):
     if epsilon is None:
         raise Exception('epsilon cannot be None when initializing the buffer')
+    if beta is not None:
+        assert not loggify, "eiither log or invsoftplus"
     buffer = Buffer(X_init.size(-1), features=features)
     ds = TensorDataset(X_init, Y_init)
     for _ in range(repeats):
@@ -46,6 +53,8 @@ def init_buffer(networks, X_init, Y_init, features, domain=None, epsilon=1e-5, l
             targets = (f_(X_init) - Y_init).pow(2).detach()
             if loggify:
                 targets = targets.log().clamp_min_(-20)
+            elif beta is not None:
+                targets = invsoftplus(targets, beta).clamp_min_(-20)
             buffer.add_targets(targets)
 
     return buffer, fg
@@ -70,8 +79,12 @@ def make_feature_generator(features, X, Y, domain, epsilon=None):
 
     if 'v' in features:
         model = SingleTaskGP(X, Y)
-        variance_estimator = GPVarianceEstimator(model, loggify=False, use_variance_scaling=False, domain=domain)
-        variance_estimator.fit()
+        variance_estimator = GPVarianceEstimator(model, loggify=False, use_variance_scaling=True, domain=domain)
+        try:
+            variance_estimator.fit()
+        except NotPSDError:
+            print('NotPSDError, using ZeroVariance estimator')
+            variance_estimator = ZeroVarianceEstimator()
         # TODO: clean this
         # network = create_network(dim, 1, 128, 'relu', False, 5, 0.3)
         # optimizer = create_optimizer(network, 1e-4)
@@ -134,13 +147,40 @@ def one_step_acquisition_gp(oracle, full_train_X, full_train_Y, acq, q,  bounds,
     return full_train_X, full_train_Y, model, candidate, candidate_image, state_dict
 
 
+def one_step_acquisition_ensemble(oracle, full_train_X, full_train_Y, acq, q,  bounds, dim, domain, domain_image,
+                            state_dict=None, plot_stuff=False):
+    model = SingleTaskGP(full_train_X, full_train_Y)
+    mll = ExactMarginalLogLikelihood(model.likelihood, model)
+    if state_dict is not None:
+        model.load_state_dict(state_dict)
+    fit_gpytorch_model(mll)
+
+    candidate, EI = get_candidate(model, acq, full_train_Y, q, bounds, dim)
+
+    if acq == 'EI' and dim == 1 and plot_stuff:
+        plot_util(oracle, model, EI, domain, domain_image, None, full_train_X,
+                  full_train_Y, candidate)
+
+
+    candidate_image = oracle(candidate)
+    full_train_X = torch.cat([full_train_X, candidate])
+    full_train_Y = torch.cat([full_train_Y, candidate_image])
+
+    state_dict = model.state_dict()
+    return full_train_X, full_train_Y, model, candidate, candidate_image, state_dict
+
+
 def one_step_acquisition(oracle, full_train_X, full_train_Y, features, buffer, networks, optimizers,
                          domain, epsilon, epochs, candidate, candidate_image, acq, q, use_log_unc, estimator,
-                         step, bounds, dim, f_losses, e_losses, print_stuff=False, plot_stuff=False, domain_image=None):
+                         step, bounds, dim, f_losses, e_losses, print_stuff=False, plot_stuff=False, domain_image=None,
+                         beta=None):
+    if beta is not None:
+        assert not use_log_unc
     fg = make_feature_generator(features, full_train_X, full_train_Y, domain, epsilon)
     model = EpistemicPredictor(full_train_X, full_train_Y, fg, networks, optimizers,
                                exp_pred_uncert=use_log_unc,
-                               estimator=estimator)
+                               estimator=estimator,
+                               beta=beta)
 
     f_losses.extend(model.fit(epochs))
 
@@ -151,6 +191,8 @@ def one_step_acquisition(oracle, full_train_X, full_train_Y, features, buffer, n
         targets = (model.f_predictor(candidate) - candidate_image).pow(2).detach()
         if use_log_unc:
             targets = targets.log().clamp_min_(-10)
+        elif beta is not None:
+            targets = invsoftplus(targets, beta).clamp_min_(-10)
         buffer.add_targets(targets)
 
     e_losses.extend(model.fit_uncertainty_estimator(buffer.features, buffer.targets, epochs))
@@ -176,6 +218,8 @@ def one_step_acquisition(oracle, full_train_X, full_train_Y, features, buffer, n
     targets = (model.f_predictor(candidate) - candidate_image).pow(2).detach()
     if use_log_unc:
         targets = targets.log().clamp_min_(-10)
+    elif beta is not None:
+        targets = invsoftplus(targets, beta).clamp_min_(-10)
     buffer.add_targets(targets)
     if print_stuff:
         print('\tMin buffer target: ', buffer.targets.squeeze().min().item(),
@@ -244,17 +288,20 @@ def plot_util(oracle, model, EI, domain, domain_image, features, full_train_X,
 def optimize(oracle, bounds, X_init, Y_init, gp=False,
              networks=None, optimizers=None, features='xd', plot_stuff=False, n_steps=5,
              epochs=15, acq='EI', q=1, domain=None, epsilon=None, print_each=1, domain_image=None, use_log_unc=False,
-             estimator='nn'):
+             estimator='nn', beta=None):
     full_train_X = X_init
     full_train_Y = Y_init
     dim = X_init.size(-1)
+
+    if beta is not None:
+        assert not use_log_unc
 
     if gp:
         state_dict = None
         buffer = None
     else:
         buffer, fg = init_buffer(networks, X_init, Y_init, features, domain, epsilon if epsilon is not None else 1e-5,
-                             loggify=use_log_unc)
+                             loggify=use_log_unc, beta=beta)
         if print_each < 10:
             print('\tInitial Buffer targets: ', buffer.targets.squeeze())
     f_losses = []
@@ -276,7 +323,7 @@ def optimize(oracle, bounds, X_init, Y_init, gp=False,
                                         step, bounds, dim, f_losses, e_losses,
                                         print_stuff=(step + 1) % print_each == 0,
                                         plot_stuff=plot_stuff,
-                                        domain_image=domain_image)
+                                        domain_image=domain_image, beta=beta)
             full_train_X, full_train_Y, model, candidate, candidate_image, buffer, fg = outs
         max_value_per_step.append(full_train_Y.max().item())
 

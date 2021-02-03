@@ -10,6 +10,10 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 import numpy as np
 
 
+def softplus(x, beta=1):
+    return 1. / beta * (torch.log((beta * x).exp() + 1))
+
+
 class EpistemicPredictor(Model):
     def __init__(self,
                  x,  # n x d tensor
@@ -21,6 +25,7 @@ class EpistemicPredictor(Model):
                  dataloader_seed=1,
                  device=torch.device("cpu"),
                  exp_pred_uncert=False,
+                 beta=None,
                  estimator='nn',
                  **kwargs  #kwargs for estimator LinearRegression and GaussianProcessRegressor
                  ):
@@ -61,6 +66,10 @@ class EpistemicPredictor(Model):
             self.e_predictor = GaussianProcessRegressor(**kwargs)
         else:
             raise NotImplementedError('`estimator` has to be one of `nn`, `linreg`, `gp')
+
+        self.beta = beta
+        if self.beta is not None:
+            assert not self.exp_pred_uncert, "either log or invsoftplus"
 
     @property
     def num_outputs(self):
@@ -140,13 +149,15 @@ class EpistemicPredictor(Model):
             predicted_uncertainties = self.e_predictor(features)
         else:
             predicted_uncertainties = (torch.FloatTensor(self.e_predictor.predict(features.detach())))
-            if not self.exp_pred_uncert and not use_raw:
+            if not self.exp_pred_uncert and self.beta is None and not use_raw:
                 # I was using Softplus here instead of RELU, but it maps all negative values to some >0 constant, which is bad !
                 predicted_uncertainties = nn.ReLU()(predicted_uncertainties)
             else:
                 predicted_uncertainties = predicted_uncertainties.clamp(-20, 3)
         if self.exp_pred_uncert and not use_raw:
             predicted_uncertainties = predicted_uncertainties.exp()
+        elif self.beta is not None and not use_raw:
+            predicted_uncertainties = softplus(predicted_uncertainties, beta=self.beta)
         return predicted_uncertainties
 
     def get_prediction_with_uncertainty(self, x, features=None):

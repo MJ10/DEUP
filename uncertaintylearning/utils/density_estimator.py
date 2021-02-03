@@ -61,6 +61,12 @@ class VarianceSource:
         return self.var_model._epistemic_uncertainty(test_points, num_samples=self.num_samples)
 
 
+
+class ZeroVarianceEstimator:
+    def score_samples(self, test_points):
+        return torch.zeros((test_points.size(0), 1))
+
+
 class GPVarianceEstimator:
     def __init__(self, gp_model, loggify=False, use_variance_scaling=False, domain=None):
         self.gp_model = gp_model
@@ -258,25 +264,24 @@ class CVKernelDensityEstimator(KernelDensityEstimator):
     """
     Kernel Density Estimator with grid search and cross validation
     """
-    def __init__(self, use_log_density=True, use_density_scaling=False):
+    def __init__(self, use_log_density=True, use_density_scaling=False, domain=None):
         super().__init__(use_log_density, use_density_scaling)
         self.kde = None
-        params = {'bandwidth': np.logspace(-3, 2, 100), 'kernel': ['exponential',
+        params = {'bandwidth': np.logspace(-3, 2, 10), 'kernel': ['exponential',
                                                                    # 'tophat',
                                                                    'gaussian',
                                                                    # 'linear',
                                                                    ]}
         self.grid = GridSearchCV(KernelDensity(), params)
+        self.domain = domain
 
     def fit(self, training_points):
         if isinstance(training_points, torch.Tensor) and training_points.requires_grad:
             return self.fit(training_points.detach())
         self.grid.fit(training_points)
         self.kde = self.grid.best_estimator_
-        values = self.kde.score_samples(training_points)
-        if isinstance(self.postprocessor, MinMaxScaler):
-            values = values[:, np.newaxis]
-        self.postprocessor.fit(values)
+        if self.domain is not None:
+            self.fit_postprocessor_on_domain(self.domain)
 
 
 class FixedSmoothKernelDensityEstimator(KernelDensityEstimator):
