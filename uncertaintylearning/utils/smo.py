@@ -1,6 +1,7 @@
 from .buffer import Buffer
 from .density_estimator import FixedSmoothKernelDensityEstimator, VarianceSource, DistanceEstimator, GPVarianceEstimator, ZeroVarianceEstimator
 from ..models.mcdropout import MCDropout
+from ..models.ensemble import Ensemble
 from .density_picker import CrossValidator
 from .networks import create_optimizer, create_network
 from torch.utils.data import TensorDataset, random_split
@@ -98,6 +99,7 @@ def make_feature_generator(features, X, Y, domain, epsilon=None):
 
     return FeatureGenerator(features, density_estimator, distance_estimator, variance_estimator, training_set, epsilon)
 
+
 def get_candidate(model, acq, full_train_Y, q, bounds, dim):
     if acq == 'EI':
         if q == 1:
@@ -128,9 +130,28 @@ def one_step_acquisition_gp(oracle, full_train_X, full_train_Y, acq, q,  bounds,
                             state_dict=None, plot_stuff=False):
     model = SingleTaskGP(full_train_X, full_train_Y)
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
+    
     if state_dict is not None:
         model.load_state_dict(state_dict)
     fit_gpytorch_model(mll)
+
+    candidate, EI = get_candidate(model, acq, full_train_Y, q, bounds, dim)
+
+    if acq == 'EI' and dim == 1 and plot_stuff:
+        plot_util(oracle, model, EI, domain, domain_image, None, full_train_X,
+                  full_train_Y, candidate)
+
+    candidate_image = oracle(candidate)
+    full_train_X = torch.cat([full_train_X, candidate])
+    full_train_Y = torch.cat([full_train_Y, candidate_image])
+
+    state_dict = model.state_dict()
+    return full_train_X, full_train_Y, model, candidate, candidate_image, state_dict
+
+
+def one_step_acquisition_ensemble(oracle, model, full_train_X, full_train_Y, acq, q,  bounds, dim, domain, domain_image, plot_stuff=False):
+
+    model.fit()
 
     candidate, EI = get_candidate(model, acq, full_train_Y, q, bounds, dim)
 
@@ -147,13 +168,9 @@ def one_step_acquisition_gp(oracle, full_train_X, full_train_Y, acq, q,  bounds,
     return full_train_X, full_train_Y, model, candidate, candidate_image, state_dict
 
 
-def one_step_acquisition_ensemble(oracle, full_train_X, full_train_Y, acq, q,  bounds, dim, domain, domain_image,
-                            state_dict=None, plot_stuff=False):
-    model = SingleTaskGP(full_train_X, full_train_Y)
-    mll = ExactMarginalLogLikelihood(model.likelihood, model)
-    if state_dict is not None:
-        model.load_state_dict(state_dict)
-    fit_gpytorch_model(mll)
+def one_step_acquisition_mcdropout(oracle, model, full_train_X, full_train_Y, acq, q,  bounds, dim, domain, domain_image, plot_stuff=False):
+    
+    model.fit()
 
     candidate, EI = get_candidate(model, acq, full_train_Y, q, bounds, dim)
 
@@ -285,7 +302,7 @@ def plot_util(oracle, model, EI, domain, domain_image, features, full_train_X,
     plt.show()
 
 
-def optimize(oracle, bounds, X_init, Y_init, gp=False,
+def optimize(oracle, bounds, X_init, Y_init, model_type="",
              networks=None, optimizers=None, features='xd', plot_stuff=False, n_steps=5,
              epochs=15, acq='EI', q=1, domain=None, epsilon=None, print_each=1, domain_image=None, use_log_unc=False,
              estimator='nn', beta=None):
@@ -296,7 +313,7 @@ def optimize(oracle, bounds, X_init, Y_init, gp=False,
     if beta is not None:
         assert not use_log_unc
 
-    if gp:
+    if model_type != "":
         state_dict = None
         buffer = None
     else:
@@ -313,9 +330,15 @@ def optimize(oracle, bounds, X_init, Y_init, gp=False,
     candidate_image = None
 
     for step in range(n_steps):
-        if gp:
+        if model_type == "gp":
             outs = one_step_acquisition_gp(oracle, full_train_X, full_train_Y, acq, q,  bounds, dim, domain,
                                            domain_image, state_dict, plot_stuff=plot_stuff)
+            full_train_X, full_train_Y, model, candidate, candidate_image, state_dict = outs
+        elif model_type == "mcdropout":
+            outs = one_step_acquisition_mcdropout(oracle, networks, full_train_X, full_train_Y, acq, q, bounds, dim, domain, domain_image, plot_stuff=plot_stuff)
+            full_train_X, full_train_Y, model, candidate, candidate_image, state_dict = outs
+        elif model_type == "ensemble":
+            outs = one_step_acquisition_ensemble(oracle, networks, full_train_X, full_train_Y, acq, q, bounds, dim, domain, domain_image, plot_stuff=plot_stuff)
             full_train_X, full_train_Y, model, candidate, candidate_image, state_dict = outs
         else:
             outs = one_step_acquisition(oracle, full_train_X, full_train_Y, features, buffer, networks, optimizers,

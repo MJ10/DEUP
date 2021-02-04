@@ -78,6 +78,7 @@ class MCDropout(Model):
         returns epistemic uncertainty estimate.
         """
         _, var = get_dropout_uncertainty_estimate(self.f_predictor, x, num_samples=num_samples)
+        var = var**2
         try:
             var = torch.FloatTensor(var).unsqueeze(-1).to(self.device)
         except TypeError:
