@@ -42,7 +42,7 @@ class Ensemble(Model):
     def num_outputs(self):
         return self.output_dim
 
-    def fit(self):
+    def fit(self, epochs=100):
         """
         Update a,f,e predictors with acquired batch
         """
@@ -52,13 +52,14 @@ class Ensemble(Model):
 
         loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
         for (predictor, optimizer) in zip(self.f_predictors, self.f_optimizers):
-            for batch_id, (xi, yi) in enumerate(loader):
-                xi, yi = xi.to(self.device), yi.to(self.device)
-                optimizer.zero_grad()
-                y_hat = predictor(xi)
-                f_loss = self.loss_fn(y_hat, yi)
-                f_loss.backward()
-            optimizer.step()
+            for epoch in range(epochs):
+                for batch_id, (xi, yi) in enumerate(loader):
+                    xi, yi = xi.to(self.device), yi.to(self.device)
+                    optimizer.zero_grad()
+                    y_hat = predictor(xi)
+                    f_loss = self.loss_fn(y_hat, yi)
+                    f_loss.backward()
+                    optimizer.step()
 
         self.epoch += 1
         for scheduler in self.schedulers.values():

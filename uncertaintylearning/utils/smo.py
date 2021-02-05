@@ -149,9 +149,10 @@ def one_step_acquisition_gp(oracle, full_train_X, full_train_Y, acq, q,  bounds,
     return full_train_X, full_train_Y, model, candidate, candidate_image, state_dict
 
 
-def one_step_acquisition_ensemble(oracle, model, full_train_X, full_train_Y, acq, q,  bounds, dim, domain, domain_image, plot_stuff=False):
-
-    model.fit()
+def one_step_acquisition_ensemble(oracle, full_train_X, full_train_Y, networks, optimizers, epochs,
+                                  acq, q,  bounds, dim, domain, domain_image, plot_stuff=False):
+    model = Ensemble(full_train_X, full_train_Y, networks, optimizers, batch_size=64)
+    model.fit(epochs)
 
     candidate, EI = get_candidate(model, acq, full_train_Y, q, bounds, dim)
 
@@ -168,9 +169,11 @@ def one_step_acquisition_ensemble(oracle, model, full_train_X, full_train_Y, acq
     return full_train_X, full_train_Y, model, candidate, candidate_image, state_dict
 
 
-def one_step_acquisition_mcdropout(oracle, model, full_train_X, full_train_Y, acq, q,  bounds, dim, domain, domain_image, plot_stuff=False):
-    
-    model.fit()
+def one_step_acquisition_mcdropout(oracle, full_train_X, full_train_Y, networks, optimizers, epochs,
+                                   acq, q,  bounds, dim, domain, domain_image, plot_stuff=False):
+    # networks and optimizers are just a network and optimier
+    model = MCDropout(full_train_X, full_train_Y, networks, optimizers)
+    model.fit(epochs)
 
     candidate, EI = get_candidate(model, acq, full_train_Y, q, bounds, dim)
 
@@ -335,10 +338,12 @@ def optimize(oracle, bounds, X_init, Y_init, model_type="",
                                            domain_image, state_dict, plot_stuff=plot_stuff)
             full_train_X, full_train_Y, model, candidate, candidate_image, state_dict = outs
         elif model_type == "mcdropout":
-            outs = one_step_acquisition_mcdropout(oracle, networks, full_train_X, full_train_Y, acq, q, bounds, dim, domain, domain_image, plot_stuff=plot_stuff)
+            outs = one_step_acquisition_mcdropout(oracle, full_train_X, full_train_Y, networks, optimizers, epochs,
+                                  acq, q,  bounds, dim, domain, domain_image, plot_stuff=plot_stuff)
             full_train_X, full_train_Y, model, candidate, candidate_image, state_dict = outs
         elif model_type == "ensemble":
-            outs = one_step_acquisition_ensemble(oracle, networks, full_train_X, full_train_Y, acq, q, bounds, dim, domain, domain_image, plot_stuff=plot_stuff)
+            outs = one_step_acquisition_ensemble(oracle, full_train_X, full_train_Y, networks, optimizers, epochs,
+                                  acq, q,  bounds, dim, domain, domain_image, plot_stuff=plot_stuff)
             full_train_X, full_train_Y, model, candidate, candidate_image, state_dict = outs
         else:
             outs = one_step_acquisition(oracle, full_train_X, full_train_Y, features, buffer, networks, optimizers,
