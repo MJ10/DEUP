@@ -1,4 +1,4 @@
-This report contains RL experiments code for [DEUP: Direct Epistemic Uncertainty Prediction]().  
+This repo contains RL experiments code for [DEUP: Direct Epistemic Uncertainty Prediction]().  
 DQN implementation is based on [here](https://github.com/pluebcke/dqn_experiments) and all the experiments use [bsuite](https://github.com/deepmind/bsuite).
 
 ### Requirements:
