@@ -18,7 +18,7 @@ functions = {'sinusoid': sinusoid,
 bounds = {'sinusoid': (1, (-1, 2)),
           'multi_optima': (1, (-1, 2)),
           'booth': (2, (-4, 4)),
-          'levi_n13': (2, (-4, 4)),
+          'levi_n13': (2, (-10, 10)),
           'ackley200': (200, (-5, 10)),
           'ackley10': (10, (-5, 10))
           }
