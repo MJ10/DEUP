@@ -42,7 +42,7 @@ class Ensemble(Model):
     def num_outputs(self):
         return self.output_dim
 
-    def fit(self):
+    def fit(self, epochs=100):
         """
         Update a,f,e predictors with acquired batch
         """
@@ -52,13 +52,14 @@ class Ensemble(Model):
 
         loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
         for (predictor, optimizer) in zip(self.f_predictors, self.f_optimizers):
-            for batch_id, (xi, yi) in enumerate(loader):
-                xi, yi = xi.to(self.device), yi.to(self.device)
-                optimizer.zero_grad()
-                y_hat = predictor(xi)
-                f_loss = self.loss_fn(y_hat, yi)
-                f_loss.backward()
-            optimizer.step()
+            for epoch in range(epochs):
+                for batch_id, (xi, yi) in enumerate(loader):
+                    xi, yi = xi.to(self.device), yi.to(self.device)
+                    optimizer.zero_grad()
+                    y_hat = predictor(xi)
+                    f_loss = self.loss_fn(y_hat, yi)
+                    f_loss.backward()
+                    optimizer.step()
 
         self.epoch += 1
         for scheduler in self.schedulers.values():
@@ -87,9 +88,9 @@ class Ensemble(Model):
         if x.ndim == 3:
             assert x.size(1) == 1
             return self.forward(x.squeeze(1))
-        means, var = self.get_prediction_with_uncertainty(x)
-        mvn = MultivariateNormal(means, var.unsqueeze(-1))
-        return mvn
+        means, variances = self.get_prediction_with_uncertainty(x)
+        #mvn = MultivariateNormal(means, var.unsqueeze(-1))
+        #return mvn
         
         # ONLY WORKS WITH 1d output !!!!!
         # When x is of shape n x d, the posterior should have mean of shape n, and covar of shape n x n (diagonal)
@@ -103,7 +104,7 @@ class Ensemble(Model):
         elif means.ndim == 3:
             assert means.size(-1) == variances.size(-1) == 1
             try:
-                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
             except RuntimeError:
                 print('RuntimeError')
                 print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
