@@ -170,10 +170,7 @@ class ReplayMemory:
 class PrioritizedReplayMemory(ReplayMemory):
     """
     Implemented the prioritized replay buffer according to "Schaul, Tom, et al. "Prioritized experience replay."
-    arXiv preprint arXiv:1511.05952 (2015)."
-
-    I also read through https://github.com/openai/baselines/blob/master/baselines/deepq/replay_buffer.py before implementing
-    this class.
+    arXiv preprint arXiv:1511.05952 (2015)." and inspired by https://github.com/openai/baselines/blob/master/baselines/deepq/replay_buffer.py.
 
     Methods:
         add(self, sample): add a sample to the buffer
