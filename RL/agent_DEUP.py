@@ -59,15 +59,21 @@ class Agent:
         else:
             self.memory = ReplayMemory(device, settings["buffer_size"], self.gamma, settings["n_steps"])
 
-        # Epistemic predictor
+        # Density Estimator
         self.features = 'd'
-        # self.density_estimator = MAFMOGDensityEstimator(batch_size=50, n_components=3, n_blocks=5, lr=1e-4, use_log_density=True,
-        #                                                 use_density_scaling=True)
-        # self.density_estimator = FixedKernelDensityEstimator('gaussian', 0.1, use_log_density = True)
-        self.density_estimator = CVKernelDensityEstimator(use_log_density = True)
+        self.DE_type = 'KDE'
 
+        if self.DE_type == 'flow':
+            self.density_estimator = MAFMOGDensityEstimator(batch_size=50, n_components=3, n_blocks=5, lr=1e-4, use_log_density=True,
+                                                            use_density_scaling=True)
+        elif self.DE_type == 'KDE':
+            # self.density_estimator = FixedKernelDensityEstimator('gaussian', 0.1, use_log_density = True)
+            self.density_estimator = CVKernelDensityEstimator(use_log_density = True)
+        self.augmented_density = False
         self.distance_estimator = DistanceEstimator
         self.variance_source = VarianceSource
+
+        # Epistemic predictor
         self.enet = Epn((state_size + len(self.features)) - 1 if "x" in self.features else len(self.features),
                         action_size, settings['qnet_settings']).to(device)
         self.e_optimizer = optim.Adam(self.enet.parameters(), lr=settings['lr'])
@@ -99,7 +105,6 @@ class Agent:
             else:
                 qvals = self.qnet.forward(observation) + 0.1 * self._epistemic_uncertainty(observation.unsqueeze(0))
             return int(torch.argmax(qvals, dim=-1).cpu().detach().numpy())
-            # return int(self.qnet.get_max_action(observation))
 
     def update_epsilon(self) -> None:
         """
@@ -224,23 +229,20 @@ class Agent:
 
 
 
-        # Update Enet
+        # Update density estimator
         if self.number_steps % self.burn_in_density == 0:
             s0_for_d, a0_for_d, _, _, _, _, _, _, _ = self.memory.sample_batch(self.burn_in_density)
             self.density_estimator.fit(s0_for_d.cpu())
-            # e_observed = self._epistemic_uncertainty(s0_for_d).gather(1, a0_for_d.long()).squeeze()
-
             if hasattr(self.density_estimator, 'kde'):
                 print('steps: {}, DE fitted: {}, bandwifth: {}'.format(self.number_steps, self.density_estimator.kde, self.density_estimator.kde.bandwidth))
 
+        # Update Enet
         if self.memory.number_samples() > self.burn_in_density:
             e_observed = self._epistemic_uncertainty(s0).gather(1, a0.long()).squeeze()
             e_loss, e_batch_loss = self.calc_loss(e_observed, torch.tensor(batch_loss).to(self.device), weights.to(self.device))
             if self.number_steps % self.burn_in_density == 0:
-                # print("steps, batch_loss:", self.number_steps, torch.topk(torch.tensor(batch_loss), 10))
-                # print("q_values: ", q_observed[torch.topk(torch.tensor(batch_loss), 10)[1]])
-                # print('q_loss', critic_loss)
-                # print("e_observed:", torch.topk(e_observed, 10))
+                # print("steps, Top k samples from Qnet: batch_loss:", self.number_steps, torch.topk(torch.tensor(batch_loss), 10))
+                # print("Top k samples from Enet, e_observed:", torch.topk(e_observed, 10))
                 print('steps, e_loss', self.number_steps, e_loss)
                 # print('density', self.density_estimator.score_samples(s0.cpu()).to(self.device))
 
@@ -279,15 +281,15 @@ class Agent:
         Trains density estimator on input samples
         """
 
-        # def perturb(data):
-        #     import torch.distributions as D
-        #     mix = D.Categorical(torch.ones(data.size(0), ))
-        #     comp = D.Independent(D.Normal(data, .3 * torch.ones_like(data)), 1)
-        #     gmm = D.MixtureSameFamily(mix, comp)
-        #     xx = gmm.sample(torch.Size([20 * data.size(0)]))
-        #     return xx
+        def perturb(data):
+            import torch.distributions as D
+            mix = D.Categorical(torch.ones(data.size(0), ))
+            comp = D.Independent(D.Normal(data, .3 * torch.ones_like(data)), 1)
+            gmm = D.MixtureSameFamily(mix, comp)
+            xx = gmm.sample(torch.Size([20 * data.size(0)]))
+            return xx
 
-        # if self.augmented_density:
-        #     self.density_estimator.fit(torch.cat((x, perturb(x))).cpu())
-        # else:
-        self.density_estimator.fit(x.cpu())
+        if self.augmented_density:
+            self.density_estimator.fit(torch.cat((x, perturb(x))).cpu())
+        else:
+            self.density_estimator.fit(x.cpu())
