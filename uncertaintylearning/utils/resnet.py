@@ -1,8 +1,30 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision import models
+
+class ResNet18plus(torch.nn.Module):
+    """
+    Taken from https://gist.github.com/y0ast/d91d09565462125a1eb75acc65da1469
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.resnet = models.resnet18(pretrained=False, num_classes=10)
+
+        self.resnet.conv1 = torch.nn.Conv2d(
+            3, 64, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        self.resnet.maxpool = torch.nn.Identity()
+        self.output = torch.nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.resnet(x)
+        out = self.output(x)
+        return out
 
 
+# The following classes have been taken and adapted from https://github.com/kuangliu/pytorch-cifar/blob/master/models/resnet.py
 class BasicBlock(nn.Module):
     expansion = 1
 
@@ -63,6 +85,9 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
+    """
+    Resnet modified to accept additional inputs to concatenate with feature maps before the final classification layers. 
+    """
     def __init__(self, block, num_blocks, num_outputs=1, positive_output=True, num_additional_inputs=1):
         super(ResNet, self).__init__()
         self.in_planes = 64

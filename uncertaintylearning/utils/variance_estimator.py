@@ -5,7 +5,9 @@ from torchvision import models
 from tqdm import tqdm
 from .density_estimator import VarianceSource
 import numpy as np
+from sklearn.preprocessing import MinMaxScaler
 
+# Taken from https://github.com/y0ast/deterministic-uncertainty-quantification/blob/master/utils/resnet_duq.py
 class ResNet_DUQ(nn.Module):
     def __init__(
         self,
@@ -111,8 +113,9 @@ class DUQVarianceSource(VarianceSource):
         self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
             self.optimizer, milestones=[25, 50, 75], gamma=0.2
         )
+        self.postprocessor = MinMaxScaler()
     
-    def fit(self, epochs=75, train_loader=None, save_path=None):
+    def fit(self, epochs=75, train_loader=None, save_path=None, val_loader=None):
         self.model.train()
         for epoch in tqdm(range(epochs)):
             running_loss = 0
@@ -146,12 +149,30 @@ class DUQVarianceSource(VarianceSource):
                 if i % 50 == 0:
                     print("Iteration: {}, Loss = {}".format(i, running_loss / (i + 1)))
 
+            if epoch % 1 == 0 and val_loader is not None:
+                self.model.eval()
+                test_loss = 0
+                correct = 0
+                total = 0
+                with torch.no_grad():
+                    for batch_idx, (inputs, targets) in enumerate(val_loader):
+                        inputs, y = inputs.to(self.device), F.one_hot(targets, self.num_classes).float().to(self.device)
+                        z, outputs = self.model(inputs)
+                        loss = bce_loss_fn(outputs, y, self.num_classes)
+                        targets= targets.to(self.device)
+                        test_loss += loss.item()
+                        _, predicted = outputs.max(1)
+                        total += targets.size(0)
+                        correct += predicted.eq(targets.to(self.device)).sum().item()
+                acc = 100.*correct/total
+                print("Epoch: {}, test acc: {}, test loss {}".format(epoch, acc, test_loss / total))
+
             self.scheduler.step()
 
         if save_path is not None:
             torch.save(self.model, save_path)
 
-    def score_samples(self, data=None, loader=None):
+    def score_samples(self, data=None, loader=None, no_preprocess=False):
         self.model.eval()
 
         with torch.no_grad():
@@ -175,4 +196,9 @@ class DUQVarianceSource(VarianceSource):
                     scores.append(-kernel_distance.cpu())
 
         scores = torch.cat(scores, dim=0)
-        return scores
+        if no_preprocess:
+            values = scores.numpy().ravel()
+        else:
+            values = self.postprocessor.transform(scores.unsqueeze(-1)).squeeze()
+        values = torch.FloatTensor(values).unsqueeze(-1)
+        return values
