@@ -91,7 +91,7 @@ density_estimator.fit(trainset, device, "", init_only=True)
 variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
 
 networks = {
-            'e_predictor': create_network(len(features), 1, 1024, 'relu', False, 5),
+            'e_predictor': create_network(len(features), 1, 1024, 'relu', False, 5), # use `create_epistemic_pred_network` for using x as feature.
             'f_predictor': ResNet18plus() # use create_wrapped_network("resnet50") for resnet-50
             }
 

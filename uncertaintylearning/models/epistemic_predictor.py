@@ -58,8 +58,6 @@ class EpistemicPredictor(Model):
                 train, ood = random_split(dataset, (n_train, len(dataset) - n_train), generator=generator)
         else:
             train = dataset
-            ood_X = torch.cat([ood_X, train_X], dim=0)
-            ood_Y = torch.cat([ood_Y, train_Y], dim=0)
             ood = TensorDataset(ood_X, ood_Y, ood_Y)
             self.fake_data = 0
         self.train_X, self.train_Y, self.train_Y_2 = train[:]
@@ -174,16 +172,17 @@ class EpistemicPredictor(Model):
         train_losses = {'a': [], 'f': [], 'e': []}
         # TODO: maybe pretrain after duplicating dat a?
         data = TensorDataset(self.train_X, self.train_Y, self.train_Y_2)
-        # if self.fake_data > 0:
-        #     data = TensorDataset(*data[list(range(len(data))) * int(self.fake_data)])
+        self.pretrain_density_estimator(self.train_X)
+        if self.fake_data > 0:
+            data = TensorDataset(*data[list(range(len(data))) * int(self.fake_data)])
 
         torch.manual_seed(self.dataloader_seed)
         loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
         # ood_batch_size = max(1, self.actual_batch_size // (len(self.train_X) // len(self.ood_X)))
-        # ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
+        ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
 
-        # ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
-        # ood_batches = list(ood_loader)
+        ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
+        ood_batches = list(ood_loader)
 
         for batch_id, (xi, yi, yi_2) in enumerate(loader):
             # Every `a_frequency` steps update a_predictor
@@ -197,43 +196,31 @@ class EpistemicPredictor(Model):
                 xi = torch.cat([xi, xi], dim=0)
                 yi = torch.cat([yi, yi_2], dim=0)
 
-            # if batch_id < len(ood_batches):
-            #     ood_xi, ood_yi = ood_batches[batch_id]
-            # else:
-            #     ood_xi = torch.empty((0, self.input_dim)).to(self.device)
-            #     ood_yi = torch.empty((0, self.output_dim)).to(self.device)
+            if batch_id < len(ood_batches):
+                ood_xi, ood_yi = ood_batches[batch_id]
+            else:
+                ood_xi = torch.empty((0, self.input_dim)).to(self.device)
+                ood_yi = torch.empty((0, self.output_dim)).to(self.device)
 
             # Compute f_loss on unseen data and update
-            f_loss = self.train_with_batch(xi, yi)# , ood_xi, ood_yi)
+            f_loss, e_loss = self.train_with_batch(xi, yi, ood_xi, ood_yi)
 
             train_losses['f'].append(f_loss.item())
-            
-            # train_losses['e'].append(e_loss.item())
+            train_losses['e'].append(e_loss.item())
 
-            # self.data_so_far = (torch.cat((self.data_so_far[0], xi), dim=0),
-            #                     torch.cat((self.data_so_far[1], yi), dim=0))
-            # self.ood_so_far = (torch.cat((self.ood_so_far[0], ood_xi), dim=0),
-            #                    torch.cat((self.ood_so_far[1], ood_yi), dim=0))
+            self.data_so_far = (torch.cat((self.data_so_far[0], xi), dim=0),
+                                torch.cat((self.data_so_far[1], yi), dim=0))
+            self.ood_so_far = (torch.cat((self.ood_so_far[0], ood_xi), dim=0),
+                               torch.cat((self.ood_so_far[1], ood_yi), dim=0))
 
             # retrain on all data seen so far to update e for current f
-        if self.retrain:
-            self.retrain_with_collected()
+            if self.retrain:
+                self.retrain_with_collected()
         self.epoch += 1
         for scheduler in self.schedulers.values():
             scheduler.step()
 
         self.is_fitted = True
-        return train_losses
-    
-    def fit_ood(self):
-        train_losses = {'a': [], 'f': [], 'e': []}
-        ood_batch_size = max(1, (len(self.ood_X) * self.actual_batch_size) // (len(self.train_X)))
-
-        ood_loader = DataLoader(TensorDataset(self.ood_X, self.ood_Y), shuffle=True, batch_size=ood_batch_size)
-        for batch_id, (ood_xi, ood_yi) in enumerate(ood_loader):
-            e_loss = self.train_ood_batch(ood_xi, ood_yi)
-
-            train_losses['e'].append(e_loss.item())
         return train_losses
 
     def retrain_with_collected(self):
@@ -252,17 +239,17 @@ class EpistemicPredictor(Model):
 
             _ = self.train_with_batch(prev_x, prev_y, prev_ood_x, prev_ood_y)
 
-    def train_with_batch(self, xi, yi):
-        # self.e_optimizer.zero_grad()
-        # x_ = torch.cat([xi, ood_xi], dim=0)
-        # y_ = torch.cat([yi, ood_yi], dim=0)
-        # f_loss = (self.f_predictor(x_) - y_).pow(2)
-        # with torch.no_grad():
-        #     aleatoric = self.a_predictor(x_)
-        # loss_hat = self._epistemic_uncertainty(x_) + aleatoric
-        # e_loss = self.loss_fn(loss_hat, f_loss)
-        # e_loss.backward()
-        # self.e_optimizer.step()
+    def train_with_batch(self, xi, yi, ood_xi, ood_yi):
+        self.e_optimizer.zero_grad()
+        x_ = torch.cat([xi, ood_xi], dim=0)
+        y_ = torch.cat([yi, ood_yi], dim=0)
+        f_loss = (self.f_predictor(x_) - y_).pow(2)
+        with torch.no_grad():
+            aleatoric = self.a_predictor(x_)
+        loss_hat = self._epistemic_uncertainty(x_) + aleatoric
+        e_loss = self.loss_fn(loss_hat, f_loss)
+        e_loss.backward()
+        self.e_optimizer.step()
 
         self.f_optimizer.zero_grad()
         y_hat = self.f_predictor(xi)
@@ -270,38 +257,7 @@ class EpistemicPredictor(Model):
         f_loss.backward()
         self.f_optimizer.step()
 
-        return f_loss
-
-    # def train_with_batch(self, xi, yi, ood_xi, ood_yi):
-    #     self.e_optimizer.zero_grad()
-    #     x_ = torch.cat([xi, ood_xi], dim=0)
-    #     y_ = torch.cat([yi, ood_yi], dim=0)
-    #     f_loss = (self.f_predictor(x_) - y_).pow(2)
-    #     with torch.no_grad():
-    #         aleatoric = self.a_predictor(x_)
-    #     loss_hat = self._epistemic_uncertainty(x_) + aleatoric
-    #     e_loss = self.loss_fn(loss_hat, f_loss)
-    #     e_loss.backward()
-    #     self.e_optimizer.step()
-
-    #     self.f_optimizer.zero_grad()
-    #     y_hat = self.f_predictor(xi)
-    #     f_loss = self.loss_fn(y_hat, yi)
-    #     f_loss.backward()
-    #     self.f_optimizer.step()
-
-    #     return f_loss, e_loss
-
-    def train_ood_batch(self, ood_x, ood_y):
-        self.e_optimizer.zero_grad()
-        f_loss = (self.f_predictor(ood_x) - ood_y).pow(2)
-        with torch.no_grad():
-            aleatoric = self.a_predictor(ood_x)
-        loss_hat = self._epistemic_uncertainty(ood_x) + aleatoric
-        e_loss = self.loss_fn(loss_hat, f_loss)
-        e_loss.backward()
-        self.e_optimizer.step()
-        return e_loss
+        return f_loss, e_loss
 
     def _epistemic_uncertainty(self, x):
         """
