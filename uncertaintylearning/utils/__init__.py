@@ -1,5 +1,5 @@
 from .density_estimator import (FixedKernelDensityEstimator, CVKernelDensityEstimator, MAFMOGDensityEstimator,
-                                MADEMOGDensityEstimator, DistanceEstimator, VarianceSource)
+                                MADEMOGDensityEstimator, DistanceEstimator, VarianceSource, FixedSmoothKernelDensityEstimator)
 from .uncertainty_estimation_utils import get_dropout_uncertainty_estimate, get_ensemble_uncertainty_estimate
 from .networks import create_network, create_optimizer, create_multiplicative_scheduler, reset_weights, create_wrapped_network, create_epistemic_pred_network
 from .maf import MAFMOG
@@ -19,7 +19,7 @@ functions = {'sinusoid': sinusoid,
 bounds = {'sinusoid': (1, (-1, 2)),
           'multi_optima': (1, (-1, 2)),
           'booth': (2, (-4, 4)),
-          'levi_n13': (2, (-4, 4)),
+          'levi_n13': (2, (-10, 10)),
           'ackley200': (200, (-5, 10)),
           'ackley10': (10, (-5, 10))
           }
