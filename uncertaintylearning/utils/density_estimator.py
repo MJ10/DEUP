@@ -7,8 +7,11 @@ from .smooth_kde import SmoothKDE
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
+from tqdm import tqdm
+import logging
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from botorch.fit import fit_gpytorch_model
+
 
 class DensityEstimator(ABC):
     """
@@ -133,36 +136,48 @@ class NNDensityEstimator(DensityEstimator):
         else:
             self.postprocessor = IdentityPostprocessor(exponentiate=not use_log_density)
 
-    def fit(self, training_points):
+    def fit(self, training_points, device, path):
         assert self.model is not None
-        self.dataset = TensorDataset(training_points)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-6)
-        dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
-
-        for epoch in range(self.epochs):
+        try:
+            self.dataset = TensorDataset(training_points)
+            dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
+        except:
+            dataloader = DataLoader(training_points, batch_size=self.batch_size, shuffle=True)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
+        self.model = self.model.to(device)
+        logging.info("Training Density Estimator...")
+        for epoch in tqdm(range(self.epochs)):
+            epoch_loss = 0
             for i, data in enumerate(dataloader):
+                # print("Iter {}".format(i))
                 self.model.train()
 
                 # check if labeled dataset
                 x = data[0]
                 x = x.view(x.shape[0], -1)
-
+                x = x.to(device)
                 loss = - self.model.log_prob(x, None).mean(0)
-
+                epoch_loss += loss.mean()
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+                if i % 25 == 0:
+                    print("Iteration: {}, Loss: {}, saving model ...".format(i, epoch_loss / (i+1)))
+        
+        torch.save(self.model.state_dict(), path)
+        # self.postprocessor.fit(self.score_samples(training_points, no_preprocess=True))
 
-        self.postprocessor.fit(self.score_samples(training_points, no_preprocess=True))
-
-    def score_samples(self, test_points, no_preprocess=False):
-        ds = TensorDataset(test_points)
-        dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=False)
+    def score_samples(self, test_points, device, no_preprocess=False):
+        try: 
+            ds = TensorDataset(test_points)
+            dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=False)
+        except:
+            dataloader = DataLoader(test_points, batch_size=self.batch_size, shuffle=False)
 
         logprobs = []
         for data in dataloader:
-            x = data[0].view(data[0].shape[0], -1)
-            logprobs.append(self.model.log_prob(x))
+            x = data[0].view(data[0].shape[0], -1).to(device)
+            logprobs.append(self.model.log_prob(x).detach().cpu())
         logprobs = torch.cat(logprobs, dim=0).clamp_min(-5).detach()
         if no_preprocess:
             values = logprobs.numpy().ravel()
@@ -183,13 +198,20 @@ class MAFMOGDensityEstimator(NNDensityEstimator):
         self.n_blocks = n_blocks
         self.n_components = n_components
         self.batch_norm = batch_norm
+        # self.model = MAFMOG(self.n_blocks, self.n_components, self.dim, self.hidden_size, self.n_hidden,
+        #             batch_norm=self.batch_norm)
 
-    def fit(self, training_points):
-        self.dim = training_points.size(-1)
+    def fit(self, training_points, device, save_path, init_only=False):
+        try:
+            self.dim = training_points.size(-1)
+        except:
+            self.dim = training_points[0][0].view(1, -1).size(-1)
+        print(self.dim)
         self.model = MAFMOG(self.n_blocks, self.n_components, self.dim, self.hidden_size, self.n_hidden,
                             batch_norm=self.batch_norm)
-
-        super().fit(training_points)
+        if init_only:
+            return
+        super().fit(training_points, device, save_path)
 
 
 class MADEMOGDensityEstimator(NNDensityEstimator):

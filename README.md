@@ -78,3 +78,14 @@ In the case of Bayesian Optimization, the results file contains one python list 
 
 The notebook `notebooks/analyzeresults.ipynb` provides an example of how to analyze many results at once using `pandas` and `matplotlib`. 
 You need to install `conda / pip` install `pandas` to run it !
+
+## Rejecting Difficult Examples
+We first train the main predictor, variance source and density source on the entire dataset and the spilts for training. The procedure is described in Appendix D.1. 
+```bash
+python bin/ood_pretrain.py --save_base_path <path_to_save_models> --data_base_path <path_to_store/load_data>
+```
+
+Next, we train the uncertainty predictor, using features and targets computed from the models trained above.
+```bash
+python bin/ood_train_deup.py --save_base_path <path_to_saved_models> --data_base_path <path_to_store/load_data> --features <feature_string>
+```

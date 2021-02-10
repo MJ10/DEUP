@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.optim.lr_scheduler import MultiplicativeLR
-
+import torchvision.models as models
+import uncertaintylearning.utils.resnet as resnet
 from collections import OrderedDict
 
 class DenseNormalGamma(nn.Module):
@@ -26,6 +27,22 @@ class DenseNormalGamma(nn.Module):
 
         return torch.stack([gamma, nu, alpha, beta]).to(x.device)
 
+def create_epistemic_pred_network(name, num_outputs=1, positive_output=True, num_additional_inputs=2):
+    if name == "resnet18":
+        model = resnet.ResNet18(num_outputs, positive_output, num_additional_inputs)
+    elif name == "resnet50":
+        model = resnet.ResNet50(num_outputs, positive_output, num_additional_inputs)
+    return model
+
+def create_wrapped_network(name, num_classes):
+    model = None
+    if name == "resnet50":
+        model = models.resnet50(pretrained=False)
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+    else:
+        raise NotImplementedError("Only 'relu' and 'tanh' activations are supported")
+
+    return nn.Sequential(model, nn.Sigmoid())
 
 def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_output=False, hidden_layers=2, dropout_prob=0.0, evidential_reg=False):
     """
@@ -55,7 +72,6 @@ def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_
     if positive_output:
         model.add_module('softplus', nn.Softplus())
     return model
-
 
 def create_optimizer(network, lr, weight_decay=0, output_weight_decay=None):
     """
