@@ -45,7 +45,7 @@ class MCDropout(Model):
     def num_outputs(self):
         return self.output_dim
 
-    def fit(self):
+    def fit(self, epochs=100):
         """
         Update a,f,e predictors with acquired batch
         """
@@ -54,16 +54,17 @@ class MCDropout(Model):
         data = TensorDataset(self.train_X, self.train_Y)
 
         loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
-        for batch_id, (xi, yi) in enumerate(loader):
-            xi = xi.to(self.device)
-            yi = yi.to(self.device)
-            self.f_optimizer.zero_grad()
-            y_hat = self.f_predictor(xi)
-            f_loss = self.loss_fn(y_hat, yi)
-            f_loss.backward()
-            self.f_optimizer.step()
+        for epoch in range(epochs):
+            for batch_id, (xi, yi) in enumerate(loader):
+                xi = xi.to(self.device)
+                yi = yi.to(self.device)
+                self.f_optimizer.zero_grad()
+                y_hat = self.f_predictor(xi)
+                f_loss = self.loss_fn(y_hat, yi)
+                f_loss.backward()
+                self.f_optimizer.step()
 
-        self.epoch += 1
+            self.epoch += 1
         for scheduler in self.scheduler.values():
             scheduler.step()
 
@@ -78,7 +79,11 @@ class MCDropout(Model):
         returns epistemic uncertainty estimate.
         """
         _, var = get_dropout_uncertainty_estimate(self.f_predictor, x, num_samples=num_samples)
-        var = torch.FloatTensor(var).unsqueeze(-1).to(self.device)
+        var = var**2
+        try:
+            var = torch.FloatTensor(var).unsqueeze(-1).to(self.device)
+        except TypeError:
+            var = torch.FloatTensor([var]).unsqueeze(-1).to(self.device)
         return var
 
     def get_prediction_with_uncertainty(self, x):
@@ -112,7 +117,7 @@ class MCDropout(Model):
         elif means.ndim == 3:
             assert means.size(-1) == variances.size(-1) == 1
             try:
-                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
             except RuntimeError:
                 print('RuntimeError')
                 print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)

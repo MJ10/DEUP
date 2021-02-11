@@ -52,6 +52,8 @@ def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_
         activation_fn = nn.ReLU
     elif activation == 'tanh':
         activation_fn = nn.Tanh
+    elif activation == 'identity':
+        activation_fn = nn.Identity
     else:
         raise NotImplementedError("Only 'relu' and 'tanh' activations are supported")
     model = nn.Sequential(OrderedDict([
