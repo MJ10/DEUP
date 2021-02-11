@@ -182,6 +182,11 @@ if args.mcdrop:
         'f_predictor': create_network(dim, 1, args.n_hidden, 'relu', False, dropout_prob)
     }
 
+    optimizers = {'f_optimizer': create_optimizer(networks['f_predictor'], args.f_lr,
+                                                  weight_decay=args.f_wd,
+                                                  output_weight_decay=args.f_owd)
+                  }
+
 if args.ensemble:
     networks = [create_network(dim, 1, args.n_hidden, 'relu', False) for _ in range(args.num_members)]
     optimizers = [create_optimizer(networks[i], args.f_lr,
