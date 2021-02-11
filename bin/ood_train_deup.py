@@ -15,18 +15,18 @@ import scipy.stats
 
 parser = ArgumentParser()
 
-parser.add_argument("--save_base_path", default='.',
-                    help='name of the function to optimize')
+parser.add_argument("--load_base_path", default='.',
+                    help='path to load models')
 
 parser.add_argument("--data_base_path", default='data',
-                    help='name of the function to optimize')
+                    help='path to load datasets')
 
 parser.add_argument("--features", default='bvd',
-                    help='name of the function to optimize')
+                    help="features to use for training. combination of [d (desnity), v(variance), b(bit), x]. eg \'dvb\'")
 
 args = parser.parse_args()
 
-save_base_path = args.save_base_path
+save_base_path = args.load_base_path
 data_base_path = args.data_base_path
 features = args.features
 
