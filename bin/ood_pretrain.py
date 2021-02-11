@@ -15,10 +15,10 @@ from sklearn.metrics import roc_auc_score
 parser = ArgumentParser()
 
 parser.add_argument("--save_base_path", default='.',
-                    help='name of the function to optimize')
+                    help='path to save trained models')
 
 parser.add_argument("--data_base_path", default='data',
-                    help='name of the function to optimize')
+                    help='path to load datasets')
 
 
 args = parser.parse_args()
