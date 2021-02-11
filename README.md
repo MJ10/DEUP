@@ -33,3 +33,5 @@ The files used for SMO are mainly `models/epistemic_predictor.py` and `utils/smo
 The notebook `notebooks/SMO.ipynb` provides examples of usage, and cells which end up in the results of the paper. The notebook `notebooks/paperfigures.ipynb` makes plots with these results.
 
 
+## Reinforcement Learning
+The code for Reinforcement Learning experiments is in the `RL` folder: `RL/main.py` launches instances of the different RL agents, and `RL/show_results.py` makes plots with the obtained results.
