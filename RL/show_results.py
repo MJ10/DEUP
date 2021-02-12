@@ -23,8 +23,12 @@ elif env_id.split('_')[0] == 'mountain':
 
 
 df = DF[DF.bsuite_env == env_id].copy()
-p = summary_analysis.plot_single_experiment(BSUITE_SCORE, env_id, SWEEP_VARS)
-learning = analysis.plot_learning(df, SWEEP_VARS)
-learning_seeds = analysis.plot_seeds(df, SWEEP_VARS)
+p1 = summary_analysis.plot_single_experiment(BSUITE_SCORE, env_id, SWEEP_VARS)
+p2 = learning = analysis.plot_learning(df, SWEEP_VARS)
+p3 = learning_seeds = analysis.plot_seeds(df, SWEEP_VARS)
+
+print(p1)
+print(p2)
+print(p3)
 
 print('Done')
