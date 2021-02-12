@@ -27,9 +27,9 @@ class DEUPEstimationImage(Model):
         super().__init__()
         self.device = device
         self.features = features
-        if self.use_dataloaders:
-            self.train_loader = data['train_loader']
-            self.estimate_aleatoric = False
+
+        self.train_loader = data['train_loader']
+        # self.estimate_aleatoric = False
 
         self.is_fitted = False
 
@@ -65,10 +65,7 @@ class DEUPEstimationImage(Model):
             running_loss = 0.0
             self.f_predictor.train()
             for batch_id, data in enumerate(self.train_loader):
-                if self.estimate_aleatoric:
-                    xi, yi, yi_2 = data
-                else:
-                    xi, yi = data
+                xi, yi = data
                 f_loss = self.train_with_batch(xi, yi)
                 running_loss += f_loss.mean()
                 if batch_id % 25 == 0:
@@ -207,3 +204,36 @@ class DEUPEstimationImage(Model):
             return self.e_predictor(x.to(self.device), u_in)
         else:
             return self.e_predictor(u_in)
+
+    def get_prediction_with_uncertainty(self, x, features=None):
+        if x.ndim == 3:
+            assert features is None, "x cannot be of 3 dimensions, when features is explicitly given"
+            preds = self.get_prediction_with_uncertainty(x.view(x.size(0) * x.size(1), x.size(2)))
+            return preds[0].view(x.size(0), x.size(1), 1), preds[1].view(x.size(0), x.size(1), 1)
+
+        if not self.is_fitted:
+            raise Exception('Model not fitted')
+
+        return self.f_predictor(x), self._uncertainty(features, x if features is None else None)
+
+    def posterior(self, x, output_indices=None, observation_noise=False, **kwargs):
+        features = None
+        if 'features' in kwargs:
+            features = kwargs['features']
+        mvn = self.forward(x, features)
+        return GPyTorchPosterior(mvn)
+
+    def forward(self, x, features=None):
+        means, variances = self.get_prediction_with_uncertainty(x, features)
+        if means.ndim == 2:
+            mvn = MultivariateNormal(means.squeeze(), torch.diag(variances.squeeze() + 1e-6))
+        elif means.ndim == 3:
+            assert means.size(-1) == variances.size(-1) == 1
+            try:
+                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
+            except RuntimeError:
+                print('RuntimeError')
+                print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+        else:
+            raise NotImplementedError("Something is wrong, just cmd+f this error message and you can start debugging.")
+        return mvn

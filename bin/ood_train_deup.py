@@ -1,4 +1,5 @@
 from matplotlib import pyplot as plt
+from argparse import ArgumentParser
 import numpy as np
 import torch
 import torch.nn as nn
@@ -6,7 +7,7 @@ import torch.nn.functional as F
 from uncertaintylearning.utils import (MAFMOGDensityEstimator, DUQVarianceSource, create_network, create_optimizer, create_multiplicative_scheduler, 
                                         create_wrapped_network, create_epistemic_pred_network)
 from uncertaintylearning.models import DEUPEstimationImage
-import uncertaintylearning.utils.resnet as ResNet18plus
+from uncertaintylearning.utils.resnet import ResNet18plus
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
