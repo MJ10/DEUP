@@ -87,5 +87,5 @@ python bin/ood_pretrain.py --save_base_path <path_to_save_models> --data_base_pa
 
 Next, we train the uncertainty predictor, using features and targets computed from the models trained above.
 ```bash
-python bin/ood_train_deup.py --save_base_path <path_to_saved_models> --data_base_path <path_to_store/load_data> --features <feature_string>
+python bin/ood_train_deup.py --load_base_path <path_to_saved_models> --data_base_path <path_to_store/load_data> --features <feature_string>
 ```
