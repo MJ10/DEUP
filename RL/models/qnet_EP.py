@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as functional
-from noisy_linear import NoisyLinear
+from .noisy_linear import NoisyLinear
 
 
 class Enet(nn.Module):
@@ -76,8 +76,4 @@ class Epn(Enet):
         """
         self.FC1.reset_noise()
         self.FC2.reset_noise()
-<<<<<<< HEAD
         self.FC3.reset_noise()
-=======
-        self.FC3.reset_noise()
->>>>>>> 2b0981d9971da26eacb17552284725186ce728ed

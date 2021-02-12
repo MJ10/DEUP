@@ -49,8 +49,6 @@ class DEUPEstimationImage(Model):
         if schedulers is None:
             self.schedulers = {}
 
-        self.retrain = retrain
-
     @property
     def num_outputs(self):
         return self.output_dim

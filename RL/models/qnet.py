@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as functional
-from noisy_linear import NoisyLinear
+from .noisy_linear import NoisyLinear
 
 
 class Qnet(nn.Module):

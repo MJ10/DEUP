@@ -11,6 +11,9 @@ setup(
         'torch>=1.7.0',
         'scikit-learn',
         'botorch',
-        'gpytorch'
+        'gpytorch',
+        'bsuite',
+        'torchvision',
+        'tqdm',
     ],
 )

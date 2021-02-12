@@ -34,4 +34,4 @@ The notebook `notebooks/SMO.ipynb` provides examples of usage, and cells which e
 
 
 ## Reinforcement Learning
-The code for Reinforcement Learning experiments is in the `RL` folder: `RL/main.py` launches instances of the different RL agents, and `RL/show_results.py` makes plots with the obtained results.
+The code for Reinforcement Learning experiments is in the `RL` folder, and is standalone with its own `README` file.

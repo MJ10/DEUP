@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import typing
 
-from segment_tree import SumTree, MinTree
+from .segment_tree import SumTree, MinTree
 
 Experience = namedtuple('Experience', 'state action reward discount next_state next_action done')
 

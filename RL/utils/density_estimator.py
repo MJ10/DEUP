@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from sklearn.neighbors import KernelDensity
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import GridSearchCV
-from maf import MAFMOG, MADEMOG
+from uncertaintylearning.utils.maf import MAFMOG, MADEMOG
 
 import torch
 from torch.utils.data import DataLoader, TensorDataset

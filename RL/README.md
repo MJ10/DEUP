@@ -15,3 +15,8 @@ python main.py --agent ['dqn', 'deup_dqn', 'boot_dqn', 'mcdrop_dqn']
 ```
 This creates a folder per each agent. 
 To plot the results, run `show_results.py` after adding the save_path to the `experiments` dictionary.
+
+To use `boot_dqn`, install [bsuite[baselines]](https://github.com/deepmind/bsuite/tree/master/bsuite/baselines) first.
+```
+pip install bsuite[baselines]
+```
