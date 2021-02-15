@@ -7,7 +7,7 @@ from .networks import create_optimizer, create_network
 from torch.utils.data import TensorDataset, random_split
 import torch
 import numpy as np
-from ..models import EpistemicPredictor
+from ..models import DEUP
 from copy import deepcopy
 from .feature_generator import FeatureGenerator
 from botorch.acquisition import ExpectedImprovement, qExpectedImprovement
@@ -197,10 +197,10 @@ def one_step_acquisition(oracle, full_train_X, full_train_Y, features, buffer, n
     if beta is not None:
         assert not use_log_unc
     fg = make_feature_generator(features, full_train_X, full_train_Y, domain, epsilon)
-    model = EpistemicPredictor(full_train_X, full_train_Y, fg, networks, optimizers,
-                               exp_pred_uncert=use_log_unc,
-                               estimator=estimator,
-                               beta=beta)
+    model = DEUP(full_train_X, full_train_Y, fg, networks, optimizers,
+                 exp_pred_uncert=use_log_unc,
+                 estimator=estimator,
+                 beta=beta)
 
     f_losses.extend(model.fit(epochs))
 

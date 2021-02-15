@@ -1,6 +1,7 @@
 import torch
 from gpytorch.utils.errors import NotPSDError
 
+
 class FeatureGenerator:
     def __init__(self, features, density_estimator=None, distance_estimator=None, variance_estimator=None,
                  training_set=None, epsilon=1e-3):

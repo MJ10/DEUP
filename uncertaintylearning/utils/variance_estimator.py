@@ -7,16 +7,17 @@ from .density_estimator import VarianceSource
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 
+
 # Taken from https://github.com/y0ast/deterministic-uncertainty-quantification/blob/master/utils/resnet_duq.py
 class ResNet_DUQ(nn.Module):
     def __init__(
-        self,
-        input_size,
-        num_classes,
-        centroid_size,
-        model_output_size,
-        length_scale,
-        gamma,
+            self,
+            input_size,
+            num_classes,
+            centroid_size,
+            model_output_size,
+            length_scale,
+            gamma,
     ):
         super().__init__()
 
@@ -70,11 +71,13 @@ class ResNet_DUQ(nn.Module):
 
         return z, y_pred
 
+
 def bce_loss_fn(y_pred, y, num_classes):
     bce = F.binary_cross_entropy(y_pred, y, reduction="sum").div(
         num_classes * y_pred.shape[0]
     )
     return bce
+
 
 def calc_gradients_input(x, y_pred):
     gradients = torch.autograd.grad(
@@ -88,6 +91,7 @@ def calc_gradients_input(x, y_pred):
 
     return gradients
 
+
 def calc_gradient_penalty(x, y_pred):
     gradients = calc_gradients_input(x, y_pred)
 
@@ -99,8 +103,10 @@ def calc_gradient_penalty(x, y_pred):
 
     return gradient_penalty
 
+
 class DUQVarianceSource(VarianceSource):
-    def __init__(self, input_size, num_classes, centroid_size, model_output_size, length_scale, gamma, l_gradient_penalty, device):
+    def __init__(self, input_size, num_classes, centroid_size, model_output_size, length_scale, gamma,
+                 l_gradient_penalty, device):
         self.l_gradient_penalty = l_gradient_penalty
         self.device = device
         self.num_classes = num_classes
@@ -114,7 +120,7 @@ class DUQVarianceSource(VarianceSource):
             self.optimizer, milestones=[25, 50, 75], gamma=0.2
         )
         self.postprocessor = MinMaxScaler()
-    
+
     def fit(self, epochs=75, train_loader=None, save_path=None, val_loader=None):
         self.model.train()
         for epoch in tqdm(range(epochs)):
@@ -145,7 +151,7 @@ class DUQVarianceSource(VarianceSource):
                 with torch.no_grad():
                     self.model.eval()
                     self.model.update_embeddings(x, y)
-                
+
                 if i % 50 == 0:
                     print("Iteration: {}, Loss = {}".format(i, running_loss / (i + 1)))
 
@@ -159,12 +165,12 @@ class DUQVarianceSource(VarianceSource):
                         inputs, y = inputs.to(self.device), F.one_hot(targets, self.num_classes).float().to(self.device)
                         z, outputs = self.model(inputs)
                         loss = bce_loss_fn(outputs, y, self.num_classes)
-                        targets= targets.to(self.device)
+                        targets = targets.to(self.device)
                         test_loss += loss.item()
                         _, predicted = outputs.max(1)
                         total += targets.size(0)
                         correct += predicted.eq(targets.to(self.device)).sum().item()
-                acc = 100.*correct/total
+                acc = 100. * correct / total
                 print("Epoch: {}, test acc: {}, test loss {}".format(epoch, acc, test_loss / total))
 
             self.scheduler.step()
@@ -177,9 +183,9 @@ class DUQVarianceSource(VarianceSource):
 
         with torch.no_grad():
             scores = []
-            
+
             if loader is None:
-                data=data.to(self.device)
+                data = data.to(self.device)
                 output = self.model(data)[1]
                 kernel_distance, pred = output.max(1)
 

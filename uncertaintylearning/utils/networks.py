@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
-from torch.optim.lr_scheduler import MultiplicativeLR
 import torchvision.models as models
 import uncertaintylearning.utils.resnet as resnet
 from collections import OrderedDict
+
 
 class DenseNormalGamma(nn.Module):
     def __init__(self, input_dim, output_dim):
@@ -27,12 +27,14 @@ class DenseNormalGamma(nn.Module):
 
         return torch.stack([gamma, nu, alpha, beta]).to(x.device)
 
+
 def create_epistemic_pred_network(name, num_outputs=1, positive_output=True, num_additional_inputs=2):
     if name == "resnet18":
         model = resnet.ResNet18(num_outputs, positive_output, num_additional_inputs)
     elif name == "resnet50":
         model = resnet.ResNet50(num_outputs, positive_output, num_additional_inputs)
     return model
+
 
 def create_wrapped_network(name, num_classes):
     model = None
@@ -44,7 +46,9 @@ def create_wrapped_network(name, num_classes):
 
     return nn.Sequential(model, nn.Sigmoid())
 
-def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_output=False, hidden_layers=2, dropout_prob=0.0, evidential_reg=False):
+
+def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_output=False, hidden_layers=2,
+                   dropout_prob=0.0, evidential_reg=False):
     """
     This function instantiates and returns a NN with the corresponding parameters
     """
@@ -73,6 +77,7 @@ def create_network(input_dim, output_dim, n_hidden, activation='relu', positive_
         model.add_module('softplus', nn.Softplus())
     return model
 
+
 def create_optimizer(network, lr, weight_decay=0, output_weight_decay=None):
     """
     This function instantiates and returns optimizer objects of the input neural network
@@ -84,12 +89,6 @@ def create_optimizer(network, lr, weight_decay=0, output_weight_decay=None):
                    "weight_decay": output_weight_decay if output_weight_decay is not None else weight_decay}]
     optimizer = Adam(sub_groups, lr=lr, weight_decay=weight_decay)
     return optimizer
-
-
-def create_multiplicative_scheduler(optimizer, lr_schedule):
-    if lr_schedule is None:
-        lr_schedule = 1
-    return MultiplicativeLR(optimizer, lr_lambda=lambda epoch: lr_schedule)
 
 
 def reset_weights(model):

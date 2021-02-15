@@ -1,33 +1,27 @@
 import torch
 import torch.nn as nn
-from botorch.models.model import Model
-from botorch.posteriors.gpytorch import GPyTorchPosterior
-from gpytorch.distributions import MultivariateNormal
-
+from uncertaintylearning.utils import softplus
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.linear_model import LinearRegression
 from sklearn.gaussian_process import GaussianProcessRegressor
 import numpy as np
+from .base import BaseModel
 
 
-def softplus(x, beta=1):
-    return 1. / beta * (torch.log((beta * x).exp() + 1))
-
-
-class EpistemicPredictor(Model):
+class DEUP(BaseModel):
     def __init__(self,
                  x,  # n x d tensor
                  y,  # n x 1 tensor
                  feature_generator,  # Instance of FeatureGenerator (..utils.feature_generator)
-                 networks,  # dict with keys 'a_predictor', 'e_predictor' and 'f_predictor'
-                 optimizers,  # dict with keys 'a_optimizer', 'e_optimizer' and 'f_optimizer'
+                 networks,  # dict with keys 'e_predictor' (optional) and 'f_predictor' (required)
+                 optimizers,  # dict with keys 'e_optimizer' and 'f_optimizer'
                  batch_size=16,
                  dataloader_seed=1,
                  device=torch.device("cpu"),
-                 exp_pred_uncert=False,
-                 beta=None,
+                 exp_pred_uncert=False,  # If true, exp(uncertainties) is returned instead of uncertainties
+                 beta=None,  # If beta is not none, softplus(uncertainties, beta) is returned instead of uncertainties
                  estimator='nn',
-                 **kwargs  #kwargs for estimator LinearRegression and GaussianProcessRegressor
+                 **kwargs  # kwargs for estimator LinearRegression and GaussianProcessRegressor
                  ):
         super().__init__()
 
@@ -36,8 +30,6 @@ class EpistemicPredictor(Model):
 
         self.x = x
         self.y = y
-
-        self.is_fitted = False
 
         self.input_dim = x.size(1)
         self.output_dim = y.size(1)
@@ -89,13 +81,11 @@ class EpistemicPredictor(Model):
         train_losses = []
         for epoch in range(epochs):
             epoch_losses = []
-            count = 0
             for batch_id, (xi, yi) in enumerate(loader):
                 f_loss = self.train_with_batch(xi, yi)
                 epoch_losses.append(f_loss.item())
             train_losses.append(np.mean(epoch_losses))
 
-        self.is_fitted = True
         return train_losses
 
     def train_with_batch(self, xi, yi):
@@ -142,7 +132,7 @@ class EpistemicPredictor(Model):
 
     def _uncertainty(self, features=None, x=None, use_raw=False):
         # Either compute uncertainty using features, or x, not both
-        assert sum(([_ is None for _ in (features, x)])) == 1, "Exactly one of `features` and `x` shouldn't be None"
+        assert (features is None) ^ (x is None),  "Exactly one of `features` and `x` shouldn't be None"
         if features is None:
             features = self.feature_generator(x)
         if self.estimator == 'nn':
@@ -150,7 +140,6 @@ class EpistemicPredictor(Model):
         else:
             predicted_uncertainties = (torch.FloatTensor(self.e_predictor.predict(features.detach())))
             if not self.exp_pred_uncert and self.beta is None and not use_raw:
-                # I was using Softplus here instead of RELU, but it maps all negative values to some >0 constant, which is bad !
                 predicted_uncertainties = nn.ReLU()(predicted_uncertainties)
             else:
                 predicted_uncertainties = predicted_uncertainties.clamp(-20, 3)
@@ -161,54 +150,14 @@ class EpistemicPredictor(Model):
         return predicted_uncertainties
 
     def get_prediction_with_uncertainty(self, x, features=None):
-        if x.ndim == 3:
-            assert features is None, "x cannot be of 3 dimensions, when features is explicitly given"
-            preds = self.get_prediction_with_uncertainty(x.view(x.size(0) * x.size(1), x.size(2)))
-            return preds[0].view(x.size(0), x.size(1), 1), preds[1].view(x.size(0), x.size(1), 1)
-
-        if not self.is_fitted:
-            raise Exception('Model not fitted')
+        super().get_prediction_with_uncertainty(x)
 
         return self.f_predictor(x), self._uncertainty(features, x if features is None else None)
 
     def predict(self, x, return_std=False, features=None):
-        # x should be a n x d tensor
-        if not self.is_fitted:
-            raise Exception('Model not fitted')
         self.eval()
         if not return_std:
             return self.f_predictor(x).detach()
         else:
             mean, var = self.get_prediction_with_uncertainty(x, features)
             return mean.detach(), var.detach().sqrt()
-
-    def posterior(self, x, output_indices=None, observation_noise=False, **kwargs):
-        # this works with 1d output only
-        # x should be a n x d tensor
-        features = None
-        if 'features' in kwargs:
-            features = kwargs['features']
-        mvn = self.forward(x, features)
-        return GPyTorchPosterior(mvn)
-
-    def forward(self, x, features=None):
-        # ONLY WORKS WITH 1d output !!!!!
-        # When x is of shape n x d, the posterior should have mean of shape n, and covar of shape n x n (diagonal)
-        # When x is of shape n x q x d, the posterior should have mean of shape n x 1, and covar of shape n x q x q ( n diagonals)
-
-        means, variances = self.get_prediction_with_uncertainty(x, features)
-        # Sometimes the predicted variances are too low, and MultivariateNormal doesn't accept their range
-
-        # TODO: maybe the two cases can be merged into one with torch.diag_embed
-        if means.ndim == 2:
-            mvn = MultivariateNormal(means.squeeze(), torch.diag(variances.squeeze() + 1e-6))
-        elif means.ndim == 3:
-            assert means.size(-1) == variances.size(-1) == 1
-            try:
-                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
-            except RuntimeError:
-                print('RuntimeError')
-                print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
-        else:
-            raise NotImplementedError("Something is wrong, just cmd+f this error message and you can start debugging.")
-        return mvn

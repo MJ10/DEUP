@@ -73,9 +73,6 @@ optimizers = {
             'e_optimizer': optim.SGD(networks['e_predictor'].parameters(), lr=0.001, momentum=0.9),
             'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.05, momentum=0.9, weight_decay=5e-4)
             }
-schedulers = {
-    'f_scheduler': torch.optim.lr_scheduler.MultiStepLR(optimizers['e_optimizer'], milestones=[25, 50], gamma=0.2)
-}
 
 data = {
     'train_loader': trainloader
