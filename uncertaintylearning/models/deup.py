@@ -28,8 +28,8 @@ class DEUP(BaseModel):
         self.device = device
         self.feature_generator = feature_generator
 
-        self.x = x
-        self.y = y
+        self.x = x.to(device)
+        self.y = y.to(device)
 
         self.input_dim = x.size(1)
         self.output_dim = y.size(1)
@@ -62,10 +62,6 @@ class DEUP(BaseModel):
         self.beta = beta
         if self.beta is not None:
             assert not self.exp_pred_uncert, "either log or invsoftplus"
-
-    @property
-    def num_outputs(self):
-        return self.output_dim
 
     def fit(self, epochs=None):
         """
@@ -102,6 +98,8 @@ class DEUP(BaseModel):
         features should be a list of n x 1 tensors, and maybe one n x d tensor if the input is used as feature
         targets should be a list of n x 1 tensors (should be L2 errors made by the main predictor
         """
+        features = features.to(self.device)
+        targets = targets.to(self.device)
         if self.estimator != 'nn':
             self.e_predictor.fit(features, targets)
             train_losses = [np.mean((self.e_predictor.predict(features) - targets.numpy()) ** 2)]
@@ -132,13 +130,15 @@ class DEUP(BaseModel):
 
     def _uncertainty(self, features=None, x=None, use_raw=False):
         # Either compute uncertainty using features, or x, not both
-        assert (features is None) ^ (x is None),  "Exactly one of `features` and `x` shouldn't be None"
+        assert (features is None) ^ (x is None), "Exactly one of `features` and `x` shouldn't be None"
         if features is None:
             features = self.feature_generator(x)
+        features = features.to(self.device)
         if self.estimator == 'nn':
             predicted_uncertainties = self.e_predictor(features)
         else:
-            predicted_uncertainties = (torch.FloatTensor(self.e_predictor.predict(features.detach())))
+            predicted_uncertainties = self.e_predictor.predict(features.cpu().detach())
+            predicted_uncertainties = torch.FloatTensor(predicted_uncertainties).to(self.device)
             if not self.exp_pred_uncert and self.beta is None and not use_raw:
                 predicted_uncertainties = nn.ReLU()(predicted_uncertainties)
             else:
@@ -150,14 +150,15 @@ class DEUP(BaseModel):
         return predicted_uncertainties
 
     def get_prediction_with_uncertainty(self, x, features=None):
-        super().get_prediction_with_uncertainty(x)
-
-        return self.f_predictor(x), self._uncertainty(features, x if features is None else None)
+        out = super().get_prediction_with_uncertainty(x)
+        if out is None:
+            return self.f_predictor(x), self._uncertainty(features, x if features is None else None)
+        return out
 
     def predict(self, x, return_std=False, features=None):
         self.eval()
         if not return_std:
-            return self.f_predictor(x).detach()
+            return self.f_predictor(x).cpu().detach()
         else:
             mean, var = self.get_prediction_with_uncertainty(x, features)
-            return mean.detach(), var.detach().sqrt()
+            return mean.cpu().detach(), var.cpu().detach().sqrt()

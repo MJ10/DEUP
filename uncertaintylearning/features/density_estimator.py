@@ -2,21 +2,20 @@ from abc import ABC, abstractmethod
 from sklearn.neighbors import KernelDensity
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import GridSearchCV
-from .maf import MAFMOG, MADEMOG
-from .smooth_kde import SmoothKDE
+from uncertaintylearning.utils.maf import MAFMOG, MADEMOG
+from uncertaintylearning.utils.smooth_kde import SmoothKDE
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from tqdm import tqdm
 import logging
-from gpytorch.mlls import ExactMarginalLogLikelihood
-from botorch.fit import fit_gpytorch_model
 
 
 class DensityEstimator(ABC):
     """
     Base class for all density estimators that the epistemic predictor can use
     """
+
     def __init__(self):
         super().__init__()
 
@@ -29,83 +28,11 @@ class DensityEstimator(ABC):
         pass
 
 
-class DistanceEstimator(DensityEstimator):
-    def __init__(self):
-        self.postprocessor = IdentityPostprocessor()
-
-    def fit(self, training_points):
-        self.dim = training_points.shape[1]
-        self.training_points = training_points
-
-    def score_samples(self, test_points):
-        values = self.postprocessor.transform(torch.cdist(self.training_points, test_points).min(axis=0)[0])
-        values = torch.FloatTensor(values).unsqueeze(-1)
-        assert values.ndim == 2 and values.size(0) == len(test_points)
-        return values
-
-
-class VarianceSource:
-    """
-    Variance estimator
-    """
-    def __init__(self, mcdropout_model, num_samples, epochs=10):
-        self.var_model = mcdropout_model
-        self.num_samples = num_samples
-        self.epochs = epochs
-
-    def fit(self, training_points=None):
-        losses = []
-        for epoch in range(self.epochs):
-            loss = self.var_model.fit()
-            losses.append(loss['f'])
-        return losses
-
-    def score_samples(self, test_points):
-        return self.var_model._epistemic_uncertainty(test_points, num_samples=self.num_samples)
-
-
-
-class ZeroVarianceEstimator:
-    def score_samples(self, test_points):
-        return torch.zeros((test_points.size(0), 1))
-
-
-class GPVarianceEstimator:
-    def __init__(self, gp_model, loggify=False, use_variance_scaling=False, domain=None):
-        self.gp_model = gp_model
-        self.loggify = loggify
-        self.postprocessor = None
-        if use_variance_scaling:
-            self.postprocessor = MinMaxScaler()
-        self.domain = None if not use_variance_scaling else domain
-
-    def fit(self):
-        mll = ExactMarginalLogLikelihood(self.gp_model.likelihood, self.gp_model)
-        fit_gpytorch_model(mll)
-        if self.domain is not None:
-            self.fit_postprocessor_on_domain(self.domain)
-
-    def fit_postprocessor_on_domain(self, domain):
-        values = self.score_samples(domain, no_postprocess=True)
-        self.postprocessor.fit(values)
-
-    def score_samples(self, test_points, no_postprocess=False):
-        scores = self.gp_model(test_points).stddev.detach().unsqueeze(-1).pow(2)
-        if self.loggify:
-            scores = scores.log()
-        if no_postprocess:
-            return scores
-        if isinstance(self.postprocessor, MinMaxScaler):
-            scores = self.postprocessor.transform(scores.numpy())
-        values = torch.FloatTensor(scores)
-        assert values.ndim == 2 and values.size(0) == len(test_points)
-        return values
-
-
 class IdentityPostprocessor:
     """
     Simple class that mimics the way MinMaxScaler and other scalers work, with either identity or exp. transformations
     """
+
     def __init__(self, exponentiate=False):
         self.exponentiate = exponentiate
 
@@ -162,13 +89,13 @@ class NNDensityEstimator(DensityEstimator):
                 loss.backward()
                 self.optimizer.step()
                 if i % 25 == 0:
-                    print("Iteration: {}, Loss: {}, saving model ...".format(i, epoch_loss / (i+1)))
-        
+                    print("Iteration: {}, Loss: {}, saving model ...".format(i, epoch_loss / (i + 1)))
+
         torch.save(self.model.state_dict(), path)
         # self.postprocessor.fit(self.score_samples(training_points, no_preprocess=True))
 
     def score_samples(self, test_points, device, no_preprocess=False):
-        try: 
+        try:
             ds = TensorDataset(test_points)
             dataloader = DataLoader(ds, batch_size=self.batch_size, shuffle=False)
         except:
@@ -192,6 +119,7 @@ class MAFMOGDensityEstimator(NNDensityEstimator):
     """
     Masked Auto Regressive Flow to estimate log-probabilities, works on 2d or more
     """
+
     def __init__(self, batch_size=10, n_blocks=5, n_components=1, hidden_size=64,
                  n_hidden=2, batch_norm=False, epochs=10, lr=1e-4, use_log_density=True, use_density_scaling=False):
         super().__init__(batch_size, hidden_size, n_hidden, epochs, lr, use_log_density, use_density_scaling)
@@ -218,11 +146,11 @@ class MADEMOGDensityEstimator(NNDensityEstimator):
     """
     MADE to estimate log-probabilities, works on 2d or more
     """
+
     def __init__(self, batch_size=10, n_components=1, hidden_size=64,
                  n_hidden=2, lr=1e-4, epochs=10, use_log_density=True, use_density_scaling=False):
         super().__init__(batch_size, hidden_size, n_hidden, epochs, lr, use_log_density, use_density_scaling)
         self.n_components = n_components
-
 
     def fit(self, training_points):
         self.dim = training_points.size(-1)
@@ -235,6 +163,7 @@ class KernelDensityEstimator(DensityEstimator):
     """
     Base class for sklearn density estimators
     """
+
     def __init__(self, use_log_density=True, use_density_scaling=False, clip_min=-50):
         self.kde = None
         if use_density_scaling:
@@ -270,6 +199,7 @@ class FixedKernelDensityEstimator(KernelDensityEstimator):
     """
     Kernel Density Estimator with fixed kernel
     """
+
     def __init__(self, kernel, bandwidth, use_log_density=True, use_density_scaling=False):
         super().__init__(use_log_density, use_density_scaling)
         self.kde = KernelDensity(kernel=kernel, bandwidth=bandwidth)
@@ -286,14 +216,15 @@ class CVKernelDensityEstimator(KernelDensityEstimator):
     """
     Kernel Density Estimator with grid search and cross validation
     """
+
     def __init__(self, use_log_density=True, use_density_scaling=False, domain=None):
         super().__init__(use_log_density, use_density_scaling)
         self.kde = None
         params = {'bandwidth': np.logspace(-3, 2, 10), 'kernel': ['exponential',
-                                                                   # 'tophat',
-                                                                   'gaussian',
-                                                                   # 'linear',
-                                                                   ]}
+                                                                  # 'tophat',
+                                                                  'gaussian',
+                                                                  # 'linear',
+                                                                  ]}
         self.grid = GridSearchCV(KernelDensity(), params)
         self.domain = domain
 
@@ -310,7 +241,9 @@ class FixedSmoothKernelDensityEstimator(KernelDensityEstimator):
     """
     Kernel Density Estimator with fixed kernel
     """
-    def __init__(self, bandwidth, kernel='gaussian', alpha=.5, use_log_density=True, use_density_scaling=False, domain=None):
+
+    def __init__(self, bandwidth, kernel='gaussian', alpha=.5, use_log_density=True, use_density_scaling=False,
+                 domain=None):
         super().__init__(use_log_density, use_density_scaling)
         self.kde = SmoothKDE(kernel=kernel, bandwidth=bandwidth, alpha=alpha)
         self.domain = domain

@@ -11,7 +11,7 @@ class MCDropout(BaseModel):
                  optimizer,
                  batch_size=16,
                  device=torch.device("cpu")):
-        super(MCDropout, self).__init__()
+        super().__init__()
         self.train_X = train_X
         self.train_Y = train_Y
 
@@ -60,17 +60,15 @@ class MCDropout(BaseModel):
         """
         _, var = get_dropout_uncertainty_estimate(self.f_predictor, x, num_samples=num_samples)
         var = var ** 2
-        try:
-            var = torch.FloatTensor(var).unsqueeze(-1).to(self.device)
-        except TypeError:
-            var = torch.FloatTensor([var]).unsqueeze(-1).to(self.device)
         return var
 
     def get_prediction_with_uncertainty(self, x):
-        super().get_prediction_with_uncertainty(x)
-        self.eval()
-        mean = self.f_predictor(x)
-        self.train()
-        var = self._uncertainty(x)
-        return mean, var
+        out = super().get_prediction_with_uncertainty(x)
+        if out is None:
+            self.eval()
+            mean = self.f_predictor(x)
+            self.train()
+            var = self._uncertainty(x)
+            return mean, var
+        return out
 

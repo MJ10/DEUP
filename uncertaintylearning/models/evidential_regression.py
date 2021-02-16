@@ -86,9 +86,11 @@ class EvidentialRegression(BaseModel):
         return alpha, beta, gamma, v
 
     def get_prediction_with_uncertainty(self, x):
-        super().get_prediction_with_uncertainty(x)
-        alpha, beta, gamma, v = self.get_outputs(x)
-        mean = gamma
-        var = beta / (v * (alpha - 1))
-        return mean, var
+        out = super().get_prediction_with_uncertainty(x)
+        if out is None:
+            alpha, beta, gamma, v = self.get_outputs(x)
+            mean = gamma
+            var = beta / (v * (alpha - 1))
+            return mean, var
+        return out
 

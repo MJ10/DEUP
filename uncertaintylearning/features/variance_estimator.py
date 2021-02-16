@@ -3,10 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
 from tqdm import tqdm
-from .density_estimator import VarianceSource
-import numpy as np
 from sklearn.preprocessing import MinMaxScaler
-
+from gpytorch.mlls import ExactMarginalLogLikelihood
+from botorch.fit import fit_gpytorch_model
 
 # Taken from https://github.com/y0ast/deterministic-uncertainty-quantification/blob/master/utils/resnet_duq.py
 class ResNet_DUQ(nn.Module):
@@ -104,7 +103,7 @@ def calc_gradient_penalty(x, y_pred):
     return gradient_penalty
 
 
-class DUQVarianceSource(VarianceSource):
+class DUQVarianceSource:
     def __init__(self, input_size, num_classes, centroid_size, model_output_size, length_scale, gamma,
                  l_gradient_penalty, device):
         self.l_gradient_penalty = l_gradient_penalty
@@ -207,4 +206,41 @@ class DUQVarianceSource(VarianceSource):
         else:
             values = self.postprocessor.transform(scores.unsqueeze(-1)).squeeze()
         values = torch.FloatTensor(values).unsqueeze(-1)
+        return values
+
+
+class ZeroVarianceEstimator:
+    def score_samples(self, test_points):
+        return torch.zeros((test_points.size(0), 1))
+
+
+class GPVarianceEstimator:
+    def __init__(self, gp_model, loggify=False, use_variance_scaling=False, domain=None):
+        self.gp_model = gp_model
+        self.loggify = loggify
+        self.postprocessor = None
+        if use_variance_scaling:
+            self.postprocessor = MinMaxScaler()
+        self.domain = None if not use_variance_scaling else domain
+
+    def fit(self):
+        mll = ExactMarginalLogLikelihood(self.gp_model.likelihood, self.gp_model)
+        fit_gpytorch_model(mll)
+        if self.domain is not None and self.postprocessor is not None:
+            self.fit_postprocessor_on_domain(self.domain)
+
+    def fit_postprocessor_on_domain(self, domain):
+        values = self.score_samples(domain, no_postprocess=True)
+        self.postprocessor.fit(values)
+
+    def score_samples(self, test_points, no_postprocess=False):
+        scores = self.gp_model(test_points).stddev.detach().unsqueeze(-1).pow(2)
+        if self.loggify:
+            scores = scores.log()
+        if no_postprocess:
+            return scores
+        if isinstance(self.postprocessor, MinMaxScaler):
+            scores = self.postprocessor.transform(scores.numpy())
+        values = torch.FloatTensor(scores)
+        assert values.ndim == 2 and values.size(0) == len(test_points)
         return values

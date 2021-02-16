@@ -1,9 +1,8 @@
 import torch
-import numpy as np
 
 
 def get_dropout_uncertainty_estimate(model, x, num_samples):
-    outputs = np.array([model(x).data.cpu().numpy() for _ in range(num_samples)]).squeeze()
+    outputs = torch.cat([model(x).unsqueeze(0) for _ in range(num_samples)])
     y_mean = outputs.mean(axis=0)
     y_std = outputs.std(axis=0)
     return y_mean, y_std

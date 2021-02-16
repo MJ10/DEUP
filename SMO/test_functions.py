@@ -48,3 +48,20 @@ def booth(X, noise):
     x = X[:, 0]
     y = X[:, 1]
     return noise * torch.randn(X.size(0), 1) - ((x + 2 * y - 7) ** 2 + (2 * x + y - 5) ** 2).unsqueeze(1)
+
+
+functions = {'sinusoid': sinusoid,
+             'multi_optima': multi_optima,
+             'booth': booth,
+             'levi_n13': levi_n13,
+             'ackley200': ackley200,
+             'ackley10': ackley10,
+             }
+
+bounds = {'sinusoid': (1, (-1, 2)),
+          'multi_optima': (1, (-1, 2)),
+          'booth': (2, (-4, 4)),
+          'levi_n13': (2, (-10, 10)),
+          'ackley200': (200, (-5, 10)),
+          'ackley10': (10, (-5, 10))
+          }

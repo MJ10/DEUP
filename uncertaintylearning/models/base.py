@@ -11,6 +11,7 @@ class BaseModel(Model):
 
     def post_forward(self, means, variances):
         # TODO: maybe the two cases can be merged into one with torch.diag_embed
+        assert means.ndim == variances.ndim
         if means.ndim == 2:
             mvn = MultivariateNormal(means.squeeze(), torch.diag(variances.squeeze() + 1e-6))
         elif means.ndim == 3:

@@ -11,7 +11,7 @@ class Ensemble(BaseModel):
                  optimizers,
                  batch_size=16,
                  device=torch.device("cpu")):  # For now, the code runs on CPU only, `.to(self.device)` should be added!
-        super(Ensemble, self).__init__()
+        super().__init__()
         self.train_X = train_X
         self.train_Y = train_Y
 
@@ -53,6 +53,8 @@ class Ensemble(BaseModel):
         }
 
     def get_prediction_with_uncertainty(self, x):
-        super().get_prediction_with_uncertainty(x)
-        return get_ensemble_uncertainty_estimate(self.f_predictors, x)
+        out = super().get_prediction_with_uncertainty(x)
+        if out is None:
+            return get_ensemble_uncertainty_estimate(self.f_predictors, x)
+        return out
 
