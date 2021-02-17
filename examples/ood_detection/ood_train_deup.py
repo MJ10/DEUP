@@ -4,7 +4,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from uncertaintylearning.utils import (MAFMOGDensityEstimator, DUQVarianceSource, create_network)
+from uncertaintylearning.features.density_estimator import MAFMOGDensityEstimator
+from uncertaintylearning.features.variance_estimator import DUQVarianceSource
+from uncertaintylearning.utils import create_network
 from uncertaintylearning.models import DEUPEstimationImage
 from uncertaintylearning.utils.resnet import ResNet18plus
 import torch.optim as optim

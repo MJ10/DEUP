@@ -5,11 +5,11 @@ import torch.nn.functional as functional
 import torch.optim as optim
 import typing
 
-from utils.memory import Experience, ReplayMemory, PrioritizedReplayMemory
-from models.qnet import Dqn, DuelDQN
-from models.qnet_EP import Epn
+from .utils.memory import Experience, ReplayMemory, PrioritizedReplayMemory
+from .models.qnet import Dqn, DuelDQN
+from .models.qnet_EP import Epn
 
-from utils.density_estimator import MAFMOGDensityEstimator, DistanceEstimator, VarianceSource, FixedKernelDensityEstimator, CVKernelDensityEstimator
+from uncertaintylearning.features.density_estimator import MAFMOGDensityEstimator, FixedKernelDensityEstimator, CVKernelDensityEstimator
 
 
 class Agent:
@@ -64,14 +64,12 @@ class Agent:
         self.DE_type = 'KDE'
 
         if self.DE_type == 'flow':
-            self.density_estimator = MAFMOGDensityEstimator(batch_size=50, n_components=3, n_blocks=5, lr=1e-4, use_log_density=True,
+            self.density_estimator = MAFMOGDensityEstimator(batch_size=50, n_components=3, n_blocks=5, lr=1e-4,
+                                                            use_log_density=True,
                                                             use_density_scaling=True)
         elif self.DE_type == 'KDE':
             # self.density_estimator = FixedKernelDensityEstimator('gaussian', 0.1, use_log_density = True)
-            self.density_estimator = CVKernelDensityEstimator(use_log_density = True)
-        self.augmented_density = False
-        self.distance_estimator = DistanceEstimator
-        self.variance_source = VarianceSource
+            self.density_estimator = CVKernelDensityEstimator(use_log_density=True)
 
         # Epistemic predictor
         self.enet = Epn((state_size + len(self.features)) - 1 if "x" in self.features else len(self.features),
@@ -227,19 +225,19 @@ class Agent:
         torch.nn.utils.clip_grad_norm_(self.qnet.parameters(), 5)
         self.optimizer.step()
 
-
-
         # Update density estimator
         if self.number_steps % self.burn_in_density == 0:
             s0_for_d, a0_for_d, _, _, _, _, _, _, _ = self.memory.sample_batch(self.burn_in_density)
             self.density_estimator.fit(s0_for_d.cpu())
             if hasattr(self.density_estimator, 'kde'):
-                print('steps: {}, DE fitted: {}, bandwifth: {}'.format(self.number_steps, self.density_estimator.kde, self.density_estimator.kde.bandwidth))
+                print('steps: {}, DE fitted: {}, bandwifth: {}'.format(self.number_steps, self.density_estimator.kde,
+                                                                       self.density_estimator.kde.bandwidth))
 
         # Update Enet
         if self.memory.number_samples() > self.burn_in_density:
             e_observed = self._epistemic_uncertainty(s0).gather(1, a0.long()).squeeze()
-            e_loss, e_batch_loss = self.calc_loss(e_observed, torch.tensor(batch_loss).to(self.device), weights.to(self.device))
+            e_loss, e_batch_loss = self.calc_loss(e_observed, torch.tensor(batch_loss).to(self.device),
+                                                  weights.to(self.device))
             if self.number_steps % self.burn_in_density == 0:
                 # print("steps, Top k samples from Qnet: batch_loss:", self.number_steps, torch.topk(torch.tensor(batch_loss), 10))
                 # print("Top k samples from Enet, e_observed:", torch.topk(e_observed, 10))
@@ -267,12 +265,6 @@ class Agent:
         if 'd' in self.features:
             density_feature = self.density_estimator.score_samples(x.cpu()).to(self.device)
             u_in.append(density_feature)
-        if 'D' in self.features:
-            distance_feature = self.distance_estimator.score_samples(x.cpu()).to(self.device)
-            u_in.append(distance_feature)
-        if 'v' in self.features:
-            variance_feature = self.variance_source.score_samples(x.cpu()).to(self.device)
-            u_in.append(variance_feature)
         u_in = torch.cat(u_in, dim=1)
         return self.enet.forward(u_in)
 
@@ -281,15 +273,4 @@ class Agent:
         Trains density estimator on input samples
         """
 
-        def perturb(data):
-            import torch.distributions as D
-            mix = D.Categorical(torch.ones(data.size(0), ))
-            comp = D.Independent(D.Normal(data, .3 * torch.ones_like(data)), 1)
-            gmm = D.MixtureSameFamily(mix, comp)
-            xx = gmm.sample(torch.Size([20 * data.size(0)]))
-            return xx
-
-        if self.augmented_density:
-            self.density_estimator.fit(torch.cat((x, perturb(x))).cpu())
-        else:
-            self.density_estimator.fit(x.cpu())
+        self.density_estimator.fit(x.cpu())

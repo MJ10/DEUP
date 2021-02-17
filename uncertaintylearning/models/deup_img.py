@@ -3,6 +3,7 @@ import torch.nn as nn
 from botorch.models.model import Model
 from tqdm import tqdm
 from .base import BaseModel
+from .deup import DEUP
 from torch.utils.data import DataLoader, TensorDataset, random_split
 import scipy.stats
 

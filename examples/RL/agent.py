@@ -5,10 +5,11 @@ import torch.nn.functional as functional
 import torch.optim as optim
 import typing
 
-from utils.memory import Experience, ReplayMemory, PrioritizedReplayMemory
-from models.qnet_MCdrop import Dqn, DuelDQN
-# from qnet import Dqn, DuelDQN
+from .utils.memory import Experience, ReplayMemory, PrioritizedReplayMemory
+from .models.qnet_MCdrop import Dqn, DuelDQN
 
+
+# from qnet import Dqn, DuelDQN
 
 
 class Agent:
