@@ -134,7 +134,6 @@ class MAFMOGDensityEstimator(NNDensityEstimator):
             self.dim = training_points.size(-1)
         except:
             self.dim = training_points[0][0].view(1, -1).size(-1)
-        print(self.dim)
         self.model = MAFMOG(self.n_blocks, self.n_components, self.dim, self.hidden_size, self.n_hidden,
                             batch_norm=self.batch_norm)
         if init_only:

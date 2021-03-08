@@ -1,4 +1,5 @@
 import torch
+import logging
 import torch.nn as nn
 from uncertaintylearning.utils import softplus
 from torch.utils.data import DataLoader, TensorDataset
@@ -6,44 +7,61 @@ from sklearn.linear_model import LinearRegression
 from sklearn.gaussian_process import GaussianProcessRegressor
 import numpy as np
 from .base import BaseModel
+from tqdm import tqdm
 
 
 class DEUP(BaseModel):
     def __init__(self,
-                 x,  # n x d tensor
-                 y,  # n x 1 tensor
+                 data, # dict with keys 'dataloader' or 'x' and 'y'
+                #  x,  # n x d tensor
+                #  y,  # n x 1 tensor
                  feature_generator,  # Instance of FeatureGenerator (..utils.feature_generator)
                  networks,  # dict with keys 'e_predictor' (optional) and 'f_predictor' (required)
                  optimizers,  # dict with keys 'e_optimizer' and 'f_optimizer'
                  batch_size=16,
                  dataloader_seed=1,
+                 loss_fn=nn.MSELoss(),
                  device=torch.device("cpu"),
                  exp_pred_uncert=False,  # If true, exp(uncertainties) is returned instead of uncertainties
                  beta=None,  # If beta is not none, softplus(uncertainties, beta) is returned instead of uncertainties
                  estimator='nn',
+                 one_hot_labels=False,
+                 num_classes=10,
+                 reduce_loss=False,
+                 e_loss_fn=None,
                  **kwargs  # kwargs for estimator LinearRegression and GaussianProcessRegressor
                  ):
         super().__init__()
 
         self.device = device
         self.feature_generator = feature_generator
+        self.one_hot_labels = one_hot_labels
+        self.num_classes = num_classes
+        self.reduce_loss = reduce_loss
+        self.e_loss_fn = e_loss_fn
 
-        self.x = x.to(device)
-        self.y = y.to(device)
+        if data['dataloader'] is not None:
+            self.use_dataloader = True
+            self.dataloader = data['dataloader']
+            self.actual_batch_size = batch_size
+        else:
+            self.x = data['x'] #.to(device)
+            self.y = data['y'] #.to(device)
+            self.use_dataloader = False
 
-        self.input_dim = x.size(1)
-        self.output_dim = y.size(1)
+            self.input_dim = x.size(1)
+            self.output_dim = y.size(1)
 
-        self.actual_batch_size = min(batch_size, x.size(0) // 2)
-        assert self.actual_batch_size >= 1, "Need more input points initially !"
+            self.actual_batch_size = min(batch_size, x.size(0) // 2)
+            assert self.actual_batch_size >= 1, "Need more input points initially !"
+            self.dataloader_seed = dataloader_seed
+            torch.manual_seed(self.dataloader_seed)
 
-        self.loss_fn = nn.MSELoss()
+        self.loss_fn = loss_fn
 
         self.f_predictor = networks['f_predictor']
         self.f_optimizer = optimizers['f_optimizer']
 
-        self.dataloader_seed = dataloader_seed
-        torch.manual_seed(self.dataloader_seed)
 
         self.exp_pred_uncert = exp_pred_uncert
 
@@ -70,12 +88,14 @@ class DEUP(BaseModel):
         if epochs is None:
             epochs = 1
         self.f_predictor.train()
-
-        data = TensorDataset(self.x, self.y)
-        loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
-
+        if not self.use_dataloader:
+            data = TensorDataset(self.x, self.y)
+            loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
+        else:
+            loader = self.dataloader
+        logging.info('Training main predictor')
         train_losses = []
-        for epoch in range(epochs):
+        for epoch in tqdm(range(epochs)):
             epoch_losses = []
             for batch_id, (xi, yi) in enumerate(loader):
                 f_loss = self.train_with_batch(xi, yi)
@@ -85,9 +105,14 @@ class DEUP(BaseModel):
         return train_losses
 
     def train_with_batch(self, xi, yi):
+        if self.one_hot_labels:
+            yi = torch.nn.functional.one_hot(yi, self.num_classes).to(torch.float32)
+        xi, yi = xi.to(self.device), yi.to(self.device)
         self.f_optimizer.zero_grad()
         y_hat = self.f_predictor(xi)
         f_loss = self.loss_fn(y_hat, yi)
+        if self.reduce_loss:
+            f_loss = f_loss.sum(1).mean(0)
         f_loss.backward()
         self.f_optimizer.step()
 
@@ -96,7 +121,7 @@ class DEUP(BaseModel):
     def fit_uncertainty_estimator(self, features, targets, epochs=None):
         """
         features should be a list of n x 1 tensors, and maybe one n x d tensor if the input is used as feature
-        targets should be a list of n x 1 tensors (should be L2 errors made by the main predictor
+        targets should be a list of n x 1 tensors (should be errors made by the main predictor)
         """
         features = features.to(self.device)
         targets = targets.to(self.device)
@@ -123,16 +148,19 @@ class DEUP(BaseModel):
     def train_uncertainty_estimator_batch(self, features_i, target_i):
         self.e_optimizer.zero_grad()
         loss_hat = self._uncertainty(features=features_i, use_raw=True)
-        e_loss = self.loss_fn(loss_hat, target_i)
+        if self.e_loss_fn is not None:
+            e_loss = self.e_loss_fn(loss_hat, target_i)
+        else:
+            e_loss = self.loss_fn(loss_hat, target_i)
         e_loss.backward()
         self.e_optimizer.step()
         return e_loss
 
-    def _uncertainty(self, features=None, x=None, use_raw=False):
+    def _uncertainty(self, features=None, x=None, use_raw=False, unseen=True):
         # Either compute uncertainty using features, or x, not both
         assert (features is None) ^ (x is None), "Exactly one of `features` and `x` shouldn't be None"
         if features is None:
-            features = self.feature_generator(x)
+            features = self.feature_generator(x, unseen=unseen, device=self.device)
         features = features.to(self.device)
         if self.estimator == 'nn':
             predicted_uncertainties = self.e_predictor(features)

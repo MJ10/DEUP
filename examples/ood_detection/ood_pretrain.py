@@ -7,7 +7,7 @@ from uncertaintylearning.features.density_estimator import MAFMOGDensityEstimato
 from uncertaintylearning.features.variance_estimator import DUQVarianceSource
 from uncertaintylearning.utils import create_network, create_wrapped_network
 from uncertaintylearning.utils.resnet import ResNet18plus
-from uncertaintylearning.models import DEUPEstimationImage
+from uncertaintylearning.models import DEUP
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
@@ -37,6 +37,7 @@ def get_split_dataset(split_num, dataset):
     return torch.utils.data.dataset.Subset(dataset, np.where(idx == 0)[0])
 
 
+# Load datasets
 transform = transforms.Compose([
     transforms.RandomCrop(32, padding=4),
     transforms.RandomHorizontalFlip(),
@@ -64,10 +65,7 @@ dataset = torchvision.datasets.CIFAR10(root=data_base_path, train=True,
 trainloader = torch.utils.data.DataLoader(dataset, batch_size=256,
                                           shuffle=True, num_workers=2)
 
-density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=1e-4,
-                                           use_log_density=True, epochs=32, use_density_scaling=True)
-variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
-
+# Initialize components
 networks = {
     'e_predictor': create_network(2, 1, 1024, 'relu', False, 3),  # not used in this script
     'f_predictor': ResNet18plus()  # use create_wrapped_network("resnet50") for resnet-50
@@ -79,25 +77,37 @@ optimizers = {
 }
 
 data = {
-    'train_loader': trainloader
+    'dataloader': trainloader
 }
 
-model = DEUPEstimationImage(data=data,
-                            networks=networks,
-                            optimizers=optimizers,
-                            density_estimator=density_estimator,
-                            variance_source=variance_source,
-                            features='bv',
-                            device=device,
-                            loss_fn=nn.BCELoss(reduction='none')
-                            )
+# Initialize without feature generator since we only pretrain the networks here
+model = DEUP(data=data,
+            feature_generator=None,
+            networks=networks,
+            optimizers=optimizers,
+            device=device,
+            loss_fn=nn.BCELoss(reduction='none'),
+            one_hot_labels=True,
+            num_classes=10,
+            reduce_loss=True
+            )
 
 model = model.to(device)
 
 model_save_path = save_base_path + "resnet18_cifar_full_new.pt"
-epochs = 75
-model.fit(epochs=epochs, val_loader=iid_testloader)
+epochs = 1
+model.fit(epochs=epochs)
 torch.save(model.f_predictor, model_save_path)
+
+density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=9e-5,
+                                            use_log_density=True, epochs=1, use_density_scaling=True)
+variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
+
+density_save_path = save_base_path + "mafmog_cifar_full_new.pt"
+density_estimator.fit(dataset, device, density_save_path)
+
+var_save_path = save_base_path + "duq_cifar_full_new.pt"
+variance_source.fit(train_loader=trainloader, save_path=var_save_path, epochs=1)
 
 for split_num in range(len(splits)):
     trainset = get_split_dataset(split_num, dataset)
@@ -105,33 +115,41 @@ for split_num in range(len(splits)):
                                               shuffle=True, num_workers=2)
 
     density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=9e-5,
-                                               use_log_density=True, epochs=30, use_density_scaling=True)
+                                               use_log_density=True, epochs=1, use_density_scaling=True)
     variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
 
     density_save_path = save_base_path + "mafmog_cifar_split_{}_new.pt".format(split_num)
     density_estimator.fit(trainset, device, density_save_path)
 
     var_save_path = save_base_path + "duq_cifar_split_{}_new.pt".format(split_num)
-    variance_source.fit(train_loader=trainloader, save_path=var_save_path)
-    variance_source.fit(train_loader=trainloader, save_path=var_save_path, val_loader=iid_testloader)
+    variance_source.fit(train_loader=trainloader, save_path=var_save_path, epochs=1)
+    
+    networks = {
+        'e_predictor': create_network(2, 1, 1024, 'relu', False, 3),  # not used in this script
+        'f_predictor': ResNet18plus()  # use create_wrapped_network("resnet50") for resnet-50
+    }
+
+    optimizers = {
+        'e_optimizer': optim.SGD(networks['e_predictor'].parameters(), lr=0.001, momentum=0.9),
+        'f_optimizer': optim.SGD(networks['f_predictor'].parameters(), lr=0.05, momentum=0.9, weight_decay=5e-4)
+    }
 
     data = {
-        'train_loader': trainloader,
-        'ood_loader': oodloader
+        'dataloader': trainloader,
     }
 
     model = DEUP(data=data,
+                 feature_generator=None,
                  networks=networks,
                  optimizers=optimizers,
-                 density_estimator=density_estimator,
-                 variance_source=variance_source,
-                 features='bv',
                  device=device,
-                 use_dataloaders=True,
                  loss_fn=nn.BCELoss(reduction='none'),
-                 batch_size=128
-                 )
+                 one_hot_labels=True,
+                 num_classes=10,
+                 reduce_loss=True
+    )
+    model = model.to(device)
 
     model_save_path = save_base_path + "resnet18_cifar_split_{}_new.pt".format(split_num)
-    model.fit(epochs=epochs, val_loader=iid_testloader)
+    model.fit(epochs=epochs)
     torch.save(model.f_predictor, model_save_path)

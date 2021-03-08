@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name='UncertaintyLearning',
     version='1.0.0',
-    description='Epistemic Uncertainty Learning for Bayesian Optimization',
+    description='Library implementing methods used in DEUP: Direct Epistemic Uncertainty Estimation',
     packages=find_packages(),
     install_requires=[
         'matplotlib>=3.3.1',

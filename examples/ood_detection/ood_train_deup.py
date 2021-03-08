@@ -7,8 +7,9 @@ import torch.nn.functional as F
 from uncertaintylearning.features.density_estimator import MAFMOGDensityEstimator
 from uncertaintylearning.features.variance_estimator import DUQVarianceSource
 from uncertaintylearning.utils import create_network
-from uncertaintylearning.models import DEUPEstimationImage
+from uncertaintylearning.models import DEUP
 from uncertaintylearning.utils.resnet import ResNet18plus
+from uncertaintylearning.features.feature_generator import FeatureGenerator
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
@@ -34,6 +35,8 @@ features = args.features
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def get_feature_generator(features, density_estimator, variance_estimator):
+    return FeatureGenerator(features, density_estimator=density_estimator, variance_estimator=variance_estimator)
 
 def test_ood(model, iid_loader, ood_loader):
     scores = []
@@ -48,21 +51,19 @@ def test_ood(model, iid_loader, ood_loader):
 
     for inp, label in ood_loader:
         with torch.no_grad():
-            score = torch.exp(model.epistemic_uncertainty(inp, is_unseen=True))
+            score = torch.exp(model._uncertainty(x=inp, unseen=True))
             loss = loss_fn(model.f_predictor(inp.to(device)), F.one_hot(label, 10).float().to(device)).sum(1).view(-1)
 
         losses.extend(loss.cpu().numpy().tolist())
 
     print("Ranked Correlation: {}".format(scipy.stats.spearmanr(scores, losses)))
 
-
-splits = [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)]
-
-
 def get_split_dataset(split_num, dataset):
     idx = torch.logical_or(torch.tensor(dataset.targets) == splits[split_num][0],
                            torch.tensor(dataset.targets) == splits[split_num][1])
     return torch.utils.data.dataset.Subset(dataset, np.where(idx == 0)[0])
+
+splits = [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)]
 
 
 transform = transforms.Compose([
@@ -99,7 +100,6 @@ variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
 
 networks = {
     'e_predictor': create_network(len(features), 1, 1024, 'relu', False, 5),
-    # use `create_epistemic_pred_network` for using x as feature.
     'f_predictor': ResNet18plus()  # use create_wrapped_network("resnet50") for resnet-50
 }
 
@@ -109,64 +109,74 @@ optimizers = {
 }
 
 data = {
-    'train_loader': trainloader,
+    'dataloader': trainloader,
 }
 
-model = DEUPEstimationImage(data=data,
-                            networks=networks,
-                            optimizers=optimizers,
-                            density_estimator=density_estimator,
-                            variance_source=variance_source,
-                            features=features,
-                            device=device,
-                            loss_fn=nn.BCELoss(reduction='none'),
-                            )
+model = DEUP(data=data,
+            feature_generator=None,
+            networks=networks,
+            optimizers=optimizers,
+            device=device,
+            loss_fn=nn.BCELoss(reduction='none'),
+            e_loss_fn=nn.MSELoss(),
+            batch_size=256
+        )
 
 model = model.to(device)
 
 ood_data_x, ood_data_y = [], []
-for split_num in range(len(splits)):
-    print(split_num)
 
+for split_num in range(0):
     density_save_path = save_base_path + "mafmog_cifar_split_{}_new.pt".format(split_num)
-    model.density_estimator.model.load_state_dict(torch.load(density_save_path))
-    model.density_estimator.model.to(device)
-    model.density_estimator.postprocessor.fit(
-        model.density_estimator.score_samples(trainset, device, no_preprocess=True))
+    density_estimator.model.load_state_dict(torch.load(density_save_path))
+    density_estimator.model.to(device)
+    density_estimator.postprocessor.fit(
+        density_estimator.score_samples(trainset, device, no_preprocess=True))
 
     var_save_path = save_base_path + "duq_cifar_split_{}_new.pt".format(split_num)
-    model.variance_source.model = torch.load(var_save_path)
-    model.variance_source.model.to(device)
-    model.variance_source.postprocessor.fit(model.variance_source.score_samples(loader=trainloader, no_preprocess=True))
+    variance_source.model = torch.load(var_save_path)
+    variance_source.model.to(device)
+    variance_source.postprocessor.fit(
+        variance_source.score_samples(loader=trainloader, no_preprocess=True))
 
     model_save_path = save_base_path + "resnet18_cifar_split_{}_new.pt".format(split_num)
     model.f_predictor = torch.load(model_save_path)
-    epi_x, epi_y, _ = model.get_epistemic_predictor_data(trainloader, splits[split_num])
+
+    feature_generator = get_feature_generator(features, density_estimator, variance_source)
+    
+    epi_x, epi_y = feature_generator.build_dataset(model.f_predictor, trainloader, 
+        nn.BCELoss(reduction='none'), splits[split_num], device
+    )
     ood_data_x.append(epi_x)
     ood_data_y.append(epi_y)
 
-ood_x_set = torch.cat(ood_data_x, dim=0)
-ood_y_set = torch.cat(ood_data_y, dim=0)
+# ood_x_set = torch.cat(ood_data_x, dim=0)
+# ood_y_set = torch.cat(ood_data_y, dim=0)
+
 # torch.save(ood_y_set, save_base_path+"y_18_" + features + ".pt")
 # torch.save(ood_x_set, save_base_path+"x_18_" + features +".pt")
 
-# ood_y_set = torch.load(base_path + "y_18_" + features + ".pt")
-# ood_x_set = torch.load(base_path + "x_18_" + features + ".pt")
+ood_y_set = torch.load(save_base_path + "y_18_" + features + ".pt")
+ood_x_set = torch.load(save_base_path + "x_18_" + features + ".pt")
 
 density_save_path = save_base_path + "mafmog_cifar_full_new.pt"
-model.density_estimator.model.load_state_dict(torch.load(density_save_path))
-model.density_estimator.model.to(device)
-model.density_estimator.postprocessor.fit(model.density_estimator.score_samples(trainset, device, no_preprocess=True))
+density_estimator.model.load_state_dict(torch.load(density_save_path))
+density_estimator.model.to(device)
+density_estimator.postprocessor.fit(density_estimator.score_samples(trainset, device, no_preprocess=True))
 
 var_save_path = save_base_path + "duq_cifar_full_new.pt"
-model.variance_source.mode = torch.load(var_save_path)
-model.variance_source.model.to(device)
-model.variance_source.postprocessor.fit(model.variance_source.score_samples(loader=trainloader, no_preprocess=True))
+variance_source.mode = torch.load(var_save_path)
+variance_source.model.to(device)
+variance_source.postprocessor.fit(variance_source.score_samples(loader=trainloader, no_preprocess=True))
 
 model_save_path = save_base_path + "resnet18_cifar_full_new.pt"
 model.f_predictor = torch.load(model_save_path)
 
-epistemic_loader = DataLoader(TensorDataset(ood_x_set, ood_y_set), shuffle=True, batch_size=512)
-model.fit_ood(epochs=100, epistemic_loader=epistemic_loader)
+feature_generator = get_feature_generator(features, density_estimator, variance_source)
+model.feature_generator = feature_generator
+model.feature_generator.density_estimator.model.to(device)
+model.feature_generator.variance_estimator.model.to(device)
 
+model.fit_uncertainty_estimator(ood_x_set, ood_y_set, epochs=1)
+model = model.to(device)
 test_ood(model, iid_testloader, oodloader)
