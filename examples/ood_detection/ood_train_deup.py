@@ -35,8 +35,10 @@ features = args.features
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 def get_feature_generator(features, density_estimator, variance_estimator):
     return FeatureGenerator(features, density_estimator=density_estimator, variance_estimator=variance_estimator)
+
 
 def test_ood(model, iid_loader, ood_loader):
     scores = []
@@ -58,13 +60,14 @@ def test_ood(model, iid_loader, ood_loader):
 
     print("Ranked Correlation: {}".format(scipy.stats.spearmanr(scores, losses)))
 
+
 def get_split_dataset(split_num, dataset):
     idx = torch.logical_or(torch.tensor(dataset.targets) == splits[split_num][0],
                            torch.tensor(dataset.targets) == splits[split_num][1])
     return torch.utils.data.dataset.Subset(dataset, np.where(idx == 0)[0])
 
-splits = [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)]
 
+splits = [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)]
 
 transform = transforms.Compose([
     transforms.RandomCrop(32, padding=4),
@@ -113,14 +116,14 @@ data = {
 }
 
 model = DEUP(data=data,
-            feature_generator=None,
-            networks=networks,
-            optimizers=optimizers,
-            device=device,
-            loss_fn=nn.BCELoss(reduction='none'),
-            e_loss_fn=nn.MSELoss(),
-            batch_size=256
-        )
+             feature_generator=None,
+             networks=networks,
+             optimizers=optimizers,
+             device=device,
+             loss_fn=nn.BCELoss(reduction='none'),
+             e_loss_fn=nn.MSELoss(),
+             batch_size=256
+             )
 
 model = model.to(device)
 
@@ -143,10 +146,10 @@ for split_num in range(0):
     model.f_predictor = torch.load(model_save_path)
 
     feature_generator = get_feature_generator(features, density_estimator, variance_source)
-    
-    epi_x, epi_y = feature_generator.build_dataset(model.f_predictor, trainloader, 
-        nn.BCELoss(reduction='none'), splits[split_num], device
-    )
+
+    epi_x, epi_y = feature_generator.build_dataset(model.f_predictor, trainloader,
+                                                   nn.BCELoss(reduction='none'), splits[split_num], device
+                                                   )
     ood_data_x.append(epi_x)
     ood_data_y.append(epi_y)
 

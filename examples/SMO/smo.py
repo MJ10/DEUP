@@ -194,7 +194,8 @@ def one_step_acquisition(oracle, full_train_X, full_train_Y, features, buffer, n
     if beta is not None:
         assert not use_log_unc
     fg = make_feature_generator(features, full_train_X, full_train_Y, domain, epsilon)
-    model = DEUP(full_train_X, full_train_Y, fg, networks, optimizers,
+    data = {'x': full_train_X, 'y': full_train_Y}
+    model = DEUP(data, fg, networks, optimizers,
                  exp_pred_uncert=use_log_unc,
                  estimator=estimator,
                  beta=beta)

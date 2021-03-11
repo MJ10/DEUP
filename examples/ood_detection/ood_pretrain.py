@@ -82,25 +82,25 @@ data = {
 
 # Initialize without feature generator since we only pretrain the networks here
 model = DEUP(data=data,
-            feature_generator=None,
-            networks=networks,
-            optimizers=optimizers,
-            device=device,
-            loss_fn=nn.BCELoss(reduction='none'),
-            one_hot_labels=True,
-            num_classes=10,
-            reduce_loss=True
-            )
+             feature_generator=None,
+             networks=networks,
+             optimizers=optimizers,
+             device=device,
+             loss_fn=nn.BCELoss(reduction='none'),
+             one_hot_labels=True,
+             num_classes=10,
+             reduce_loss=True
+             )
 
 model = model.to(device)
 
 model_save_path = save_base_path + "resnet18_cifar_full_new.pt"
 epochs = 1
-model.fit(epochs=epochs)
+model.fit(epochs=epochs, progress=True)
 torch.save(model.f_predictor, model_save_path)
 
 density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=9e-5,
-                                            use_log_density=True, epochs=1, use_density_scaling=True)
+                                           use_log_density=True, epochs=1, use_density_scaling=True)
 variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
 
 density_save_path = save_base_path + "mafmog_cifar_full_new.pt"
@@ -123,7 +123,7 @@ for split_num in range(len(splits)):
 
     var_save_path = save_base_path + "duq_cifar_split_{}_new.pt".format(split_num)
     variance_source.fit(train_loader=trainloader, save_path=var_save_path, epochs=1)
-    
+
     networks = {
         'e_predictor': create_network(2, 1, 1024, 'relu', False, 3),  # not used in this script
         'f_predictor': ResNet18plus()  # use create_wrapped_network("resnet50") for resnet-50
@@ -147,9 +147,9 @@ for split_num in range(len(splits)):
                  one_hot_labels=True,
                  num_classes=10,
                  reduce_loss=True
-    )
+                 )
     model = model.to(device)
 
     model_save_path = save_base_path + "resnet18_cifar_split_{}_new.pt".format(split_num)
-    model.fit(epochs=epochs)
+    model.fit(epochs=epochs, progress=True)
     torch.save(model.f_predictor, model_save_path)

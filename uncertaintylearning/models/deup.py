@@ -12,9 +12,7 @@ from tqdm import tqdm
 
 class DEUP(BaseModel):
     def __init__(self,
-                 data, # dict with keys 'dataloader' or 'x' and 'y'
-                #  x,  # n x d tensor
-                #  y,  # n x 1 tensor
+                 data,  # dict with keys 'dataloader' or 'x' and 'y'
                  feature_generator,  # Instance of FeatureGenerator (..utils.feature_generator)
                  networks,  # dict with keys 'e_predictor' (optional) and 'f_predictor' (required)
                  optimizers,  # dict with keys 'e_optimizer' and 'f_optimizer'
@@ -40,7 +38,7 @@ class DEUP(BaseModel):
         self.reduce_loss = reduce_loss
         self.e_loss_fn = e_loss_fn
 
-        if data['dataloader'] is not None:
+        if 'dataloader' in data.keys():
             self.use_dataloader = True
             self.dataloader = data['dataloader']
             self.actual_batch_size = batch_size
@@ -49,10 +47,10 @@ class DEUP(BaseModel):
             self.y = data['y'] #.to(device)
             self.use_dataloader = False
 
-            self.input_dim = x.size(1)
-            self.output_dim = y.size(1)
+            self.input_dim = self.x.size(1)
+            self.output_dim = self.y.size(1)
 
-            self.actual_batch_size = min(batch_size, x.size(0) // 2)
+            self.actual_batch_size = min(batch_size, self.x.size(0) // 2)
             assert self.actual_batch_size >= 1, "Need more input points initially !"
             self.dataloader_seed = dataloader_seed
             torch.manual_seed(self.dataloader_seed)
@@ -81,7 +79,7 @@ class DEUP(BaseModel):
         if self.beta is not None:
             assert not self.exp_pred_uncert, "either log or invsoftplus"
 
-    def fit(self, epochs=None):
+    def fit(self, epochs=None, progress=False):
         """
         Update a,f,e predictors with acquired batch
         """
@@ -95,7 +93,10 @@ class DEUP(BaseModel):
             loader = self.dataloader
         logging.info('Training main predictor')
         train_losses = []
-        for epoch in tqdm(range(epochs)):
+        iterable = range(epochs)
+        if progress:
+            iterable = tqdm(iterable)
+        for epoch in iterable:
             epoch_losses = []
             for batch_id, (xi, yi) in enumerate(loader):
                 f_loss = self.train_with_batch(xi, yi)
