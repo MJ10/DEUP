@@ -5,9 +5,9 @@ import torch.nn.functional as functional
 import torch.optim as optim
 import typing
 
-from .utils.memory import Experience, ReplayMemory, PrioritizedReplayMemory
-from .models.qnet import Dqn, DuelDQN
-from .models.qnet_EP import Epn
+from utils.memory import Experience, ReplayMemory, PrioritizedReplayMemory
+from models.qnet import Dqn, DuelDQN
+from models.qnet_EP import Epn
 
 from uncertaintylearning.features.density_estimator import MAFMOGDensityEstimator, FixedKernelDensityEstimator, CVKernelDensityEstimator
 

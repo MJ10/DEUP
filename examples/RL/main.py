@@ -24,13 +24,13 @@ save_path = args.save_path
 
 drop_prob = 0
 if args.agent == 'deup_dqn':
-    from .agent_DEUP import Agent
+    from agent_DEUP import Agent
 elif args.agent == 'dqn':
-    from .agent import Agent
+    from agent import Agent
 elif args.agent == 'boot_dqn':
     from bsuite.baselines.tf.boot_dqn import default_agent as Agent
 elif args.agent == 'mcdrop_dqn':
-    from .agent import Agent
+    from agent import Agent
     drop_prob = 0.1
 else:
     print('This agent is not implemented!!')

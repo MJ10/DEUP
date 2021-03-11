@@ -1,4 +1,4 @@
-from .buffer import Buffer
+from buffer import Buffer
 from uncertaintylearning.features.density_estimator import FixedSmoothKernelDensityEstimator
 from uncertaintylearning.features.variance_estimator import GPVarianceEstimator, ZeroVarianceEstimator
 from uncertaintylearning.features.distance_estimator import DistanceEstimator

@@ -1,14 +1,9 @@
 import torch
 from uncertaintylearning.utils import create_network, create_optimizer
 import numpy as np
-import matplotlib.pyplot as plt
 
-import warnings
-
-warnings.filterwarnings('ignore')
-
-from .test_functions import functions, bounds as boundsx
-from .smo import optimize
+from test_functions import functions, bounds as boundsx
+from smo import optimize
 from uncertaintylearning.models.mcdropout import MCDropout
 import pickle
 
@@ -22,7 +17,7 @@ parser.add_argument("--n-init", type=int, default=6, help='number of initial dat
 parser.add_argument("--function", default='multi_optima', help='one of the keys of SMO.test_functions.functions')
 parser.add_argument("--noise", type=float, default=0, help='additive aleatoric noise')
 parser.add_argument("--method", default='deup', help='one of deup, gp, mcdropout, ensemble')
-parser.add_argument("--save_base_path", defualt='.', help='path to save results')
+parser.add_argument("--save_base_path", default='.', help='path to save results')
 
 args = parser.parse_args()
 
@@ -54,22 +49,22 @@ for seed in range(n_seeds):
 
     if args.method == 'gp':
         outs = optimize(f, bounds, X_init, Y_init, model_type="gp", plot_stuff=False, domain=X, domain_image=Y,
-                           n_steps=n_steps)
+                        n_steps=n_steps)
 
     elif args.method == 'ensemble':
         nets = [create_network(dim, 1, 128, 'relu', False, 3) for i in range(3)]
         opts = [create_optimizer(nets[i], 1e-3) for i in range(3)]
         outs = optimize(f, bounds, X_init, Y_init, model_type="ensemble", networks=nets, optimizers=opts,
-                           features=features,
-                           epochs=200, plot_stuff=False, domain=X, domain_image=Y, n_steps=n_steps)
+                        features=features,
+                        epochs=200, plot_stuff=False, domain=X, domain_image=Y, n_steps=n_steps)
 
     elif args.method == 'mcdropout':
         network = create_network(dim, 1, 128, 'relu', False, 3, 0.3)
         optimizer = create_optimizer(network, 1e-3)
         mcdropout_model = MCDropout(X_init, Y_init, network, optimizer, batch_size=64)
         outs = optimize(f, bounds, X_init, Y_init, model_type="mcdropout", networks=network, optimizers=optimizer,
-                           features=features,
-                           epochs=200, plot_stuff=False, domain=X, domain_image=Y, n_steps=n_steps)
+                        features=features,
+                        epochs=200, plot_stuff=False, domain=X, domain_image=Y, n_steps=n_steps)
 
     elif args.method == 'deup':
         networks = {
@@ -91,4 +86,4 @@ string = f"{args.method}_{args.function}_{args.n_init}"
 filename = os.path.join(args.save_base_path, string)
 pickle.dump({'results': results, 'string': string}, open(filename, 'wb'))
 
-
+print('Results saved !')

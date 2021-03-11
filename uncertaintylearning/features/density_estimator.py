@@ -89,7 +89,7 @@ class NNDensityEstimator(DensityEstimator):
                 loss.backward()
                 self.optimizer.step()
                 if i % 25 == 0:
-                    print("Iteration: {}, Loss: {}, saving model ...".format(i, epoch_loss / (i + 1)))
+                    print("Neural Density estimation - Iteration: {}, Loss: {}, saving model ...".format(i, epoch_loss / (i + 1)))
         if path is not None:
             torch.save(self.model.state_dict(), path)
         # self.postprocessor.fit(self.score_samples(training_points, no_preprocess=True))

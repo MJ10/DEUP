@@ -14,6 +14,7 @@ setup(
         'gpytorch',
         'bsuite',
         'torchvision',
+        'requests',
         'tqdm',
     ],
 )

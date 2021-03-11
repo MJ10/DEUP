@@ -13,7 +13,7 @@ from uncertaintylearning.features.feature_generator import FeatureGenerator
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 import scipy.stats
 
 parser = ArgumentParser()

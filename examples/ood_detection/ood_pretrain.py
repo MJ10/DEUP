@@ -1,4 +1,3 @@
-from matplotlib import pyplot as plt
 from argparse import ArgumentParser
 import numpy as np
 import torch
@@ -11,7 +10,6 @@ from uncertaintylearning.models import DEUP
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
-from sklearn.metrics import roc_auc_score
 
 parser = ArgumentParser()
 
@@ -49,22 +47,22 @@ test_transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
 ])
-
+print(0)
 oodset = torchvision.datasets.SVHN(root=data_base_path, split='test',
                                    download=True, transform=test_transform)
 oodloader = torch.utils.data.DataLoader(oodset, batch_size=64,
                                         shuffle=False, num_workers=2)
-
+print(1)
 iid_testset = torchvision.datasets.CIFAR10(root=data_base_path, train=False,
                                            download=True, transform=test_transform)
 iid_testloader = torch.utils.data.DataLoader(iid_testset, batch_size=128,
                                              shuffle=False, num_workers=2)
-
+print(2)
 dataset = torchvision.datasets.CIFAR10(root=data_base_path, train=True,
                                        download=True, transform=test_transform)
 trainloader = torch.utils.data.DataLoader(dataset, batch_size=256,
                                           shuffle=True, num_workers=2)
-
+print(3)
 # Initialize components
 networks = {
     'e_predictor': create_network(2, 1, 1024, 'relu', False, 3),  # not used in this script
@@ -91,12 +89,13 @@ model = DEUP(data=data,
              num_classes=10,
              reduce_loss=True
              )
-
+print(4)
 model = model.to(device)
 
 model_save_path = save_base_path + "resnet18_cifar_full_new.pt"
 epochs = 1
 model.fit(epochs=epochs, progress=True)
+print(5)
 torch.save(model.f_predictor, model_save_path)
 
 density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=9e-5,

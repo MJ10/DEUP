@@ -19,19 +19,36 @@ The notebook `notebooks/fixed_training_set.ipynb` illustrates how DEUP is used t
 ## Rejecting Difficult Examples
 We first train the main predictor, variance source and density source on the entire dataset and the spilts for training. The procedure is described in Appendix D.1. 
 ```bash
-python bin/ood_pretrain.py --save_base_path <path_to_save_models> --data_base_path <path_to_store/load_data>
+python examples/ood_detection/ood_pretrain.py --save_base_path <path_to_save_models> --data_base_path <path_to_store/load_data>
 ```
 
 Next, we train the uncertainty predictor, using features and targets computed from the models trained above.
 ```bash
-python bin/ood_train_deup.py --load_base_path <path_to_saved_models> --data_base_path <path_to_store/load_data> --features <feature_string>
+python examples/ood_detection/ood_train_deup.py --load_base_path <path_to_saved_models> --data_base_path <path_to_store/load_data> --features <feature_string>
 ```
 
 
 ## Sequential Model Optimization
-The files used for SMO are mainly `models/epistemic_predictor.py` and `utils/smo.py`. 
-The notebook `notebooks/SMO.ipynb` provides examples of usage, and cells which end up in the results of the paper. The notebook `notebooks/paperfigures.ipynb` makes plots with these results.
+The notebook `notebooks/SMO.ipynb` provides examples of usage. The notebook `notebooks/paperfigures.ipynb` makes plots with the results obtained by the `SMO` notebook.
+
+Alternatively, you can run
+```bash
+python examples/SMO/main.py
+```
+, with adequate arguments (`--method`, `--n-steps`, etc...) to optimize a function and save the results in a pickle file.
 
 
 ## Reinforcement Learning
-The code for Reinforcement Learning experiments is in the `RL` folder, and is standalone with its own `README` file.
+DQN implementation is based on [here](https://github.com/pluebcke/dqn_experiments) and all the experiments use [bsuite](https://github.com/deepmind/bsuite).
+
+To reproduce the results of the paper, simply run:
+```
+python examples/RL/main.py --agent ['dqn', 'deup_dqn', 'boot_dqn', 'mcdrop_dqn']
+```
+This creates a folder per each agent. 
+To plot the results, run `python/RL/show_results.py` after adding the save_path to the `experiments` dictionary.
+
+To use `boot_dqn`, install [bsuite[baselines]](https://github.com/deepmind/bsuite/tree/master/bsuite/baselines) first.
+```
+pip install bsuite[baselines]
+```

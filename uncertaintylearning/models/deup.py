@@ -98,9 +98,13 @@ class DEUP(BaseModel):
             iterable = tqdm(iterable)
         for epoch in iterable:
             epoch_losses = []
-            for batch_id, (xi, yi) in enumerate(loader):
+            iterable2 = enumerate(loader)
+            if progress:
+                iterable2 = tqdm(iterable2)
+            for batch_id, (xi, yi) in iterable2:
                 f_loss = self.train_with_batch(xi, yi)
                 epoch_losses.append(f_loss.item())
+                break
             train_losses.append(np.mean(epoch_losses))
 
         return train_losses
