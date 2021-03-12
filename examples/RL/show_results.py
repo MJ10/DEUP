@@ -6,11 +6,11 @@ from bsuite.experiments.deep_sea import analysis as deep_sea_analysis
 from bsuite.experiments.cartpole import analysis as cartpole_analysis
 from bsuite.experiments.mountain_car import analysis as mounrain_car_analysis
 
-experiments = { 'DQN': "runs/DQN/",
-                'DQN_DEUP': "runs/DQN_EP",
-                "Boot_DQN": "runs/DQN_Boot",
-                'DQN_MCdrop': "runs/DQN_MCdrop/"
-                }
+experiments = {#'DQN': "runs/DQN/",
+               'DQN_DEUP': "runs/DEUP_DQN",
+              # "Boot_DQN": "runs/DQN_Boot",
+               #'DQN_MCdrop': "runs/DQN_MCdrop/"
+               }
 
 DF, SWEEP_VARS = csv_load.load_bsuite(experiments)
 BSUITE_SCORE = summary_analysis.bsuite_score(DF, SWEEP_VARS)
@@ -20,7 +20,6 @@ if env_id.split('_')[0] == 'cartpole':
     analysis = cartpole_analysis
 elif env_id.split('_')[0] == 'mountain':
     analysis = mounrain_car_analysis
-
 
 df = DF[DF.bsuite_env == env_id].copy()
 p1 = summary_analysis.plot_single_experiment(BSUITE_SCORE, env_id, SWEEP_VARS)

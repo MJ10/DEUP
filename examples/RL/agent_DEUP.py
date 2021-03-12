@@ -6,9 +6,10 @@ import torch.optim as optim
 import typing
 
 from utils.memory import Experience, ReplayMemory, PrioritizedReplayMemory
-from models.qnet_MCdrop import Dqn, DuelDQN
-# from qnet import Dqn, DuelDQN
+from models.qnet import Dqn, DuelDQN
+from models.qnet_EP import Epn
 
+from uncertaintylearning.features.density_estimator import MAFMOGDensityEstimator, FixedKernelDensityEstimator, CVKernelDensityEstimator
 
 
 class Agent:
@@ -33,13 +34,8 @@ class Agent:
         self.batch_size = settings['batch_size']
         self.noisy_nets = settings['qnet_settings']['noisy_nets']
 
-        if settings["duelling_dqn"]:
-            self.qnet = DuelDQN(state_size, action_size, settings['qnet_settings']).to(device)
-            self.q_target = DuelDQN(state_size, action_size, settings['qnet_settings']).to(device)
-        else:
-            self.qnet = Dqn(state_size, action_size, settings['qnet_settings']).to(device)
-            self.q_target = Dqn(state_size, action_size, settings['qnet_settings']).to(device)
-            self.drop_porb = 0
+        self.qnet = Dqn(state_size, action_size, settings['qnet_settings']).to(device)
+        self.q_target = Dqn(state_size, action_size, settings['qnet_settings']).to(device)
 
         self.q_target.load_state_dict(self.qnet.state_dict())
         self.optimizer = optim.Adam(self.qnet.parameters(), lr=settings['lr'])
@@ -62,6 +58,25 @@ class Agent:
                                                   settings["alpha"], settings["beta0"], settings["beta_increment"])
         else:
             self.memory = ReplayMemory(device, settings["buffer_size"], self.gamma, settings["n_steps"])
+
+        # Density Estimator
+        self.features = 'd'
+        self.DE_type = 'KDE'
+
+        if self.DE_type == 'flow':
+            self.density_estimator = MAFMOGDensityEstimator(batch_size=50, n_components=3, n_blocks=5, lr=1e-4,
+                                                            use_log_density=True,
+                                                            use_density_scaling=True)
+        elif self.DE_type == 'KDE':
+            # self.density_estimator = FixedKernelDensityEstimator('gaussian', 0.1, use_log_density = True)
+            self.density_estimator = CVKernelDensityEstimator(use_log_density=True)
+
+        # Epistemic predictor
+        self.enet = Epn((state_size + len(self.features)) - 1 if "x" in self.features else len(self.features),
+                        action_size, settings['qnet_settings']).to(device)
+        self.e_optimizer = optim.Adam(self.enet.parameters(), lr=settings['lr'])
+
+        self.burn_in_density = 10000
         return
 
     def select_action(self, timestep: dm_env.TimeStep) -> int:
@@ -83,7 +98,11 @@ class Agent:
         if np.random.rand() < self.epsilon:
             return np.random.choice(self.action_size)
         else:
-            return int(self.qnet.get_max_action(observation))
+            if self.number_steps <= self.burn_in_density:
+                qvals = self.qnet.forward(observation)
+            else:
+                qvals = self.qnet.forward(observation) + 0.1 * self._epistemic_uncertainty(observation.unsqueeze(0))
+            return int(torch.argmax(qvals, dim=-1).cpu().detach().numpy())
 
     def update_epsilon(self) -> None:
         """
@@ -108,6 +127,9 @@ class Agent:
         Returns:
             tuple(torch.Tensor, np.float64): mean squared error loss, loss for each indivdual sample
         """
+        # print('q_observed is cuda', q_observed.is_cuda)
+        # print('q_target is cuda', q_target.is_cuda)
+
         losses = functional.mse_loss(q_observed, q_target, reduction='none')
         loss = (weights * losses).sum() / weights.sum()
         return loss, losses.cpu().detach().numpy() + 1e-8
@@ -203,6 +225,52 @@ class Agent:
         torch.nn.utils.clip_grad_norm_(self.qnet.parameters(), 5)
         self.optimizer.step()
 
+        # Update density estimator
+        if self.number_steps % self.burn_in_density == 0:
+            s0_for_d, a0_for_d, _, _, _, _, _, _, _ = self.memory.sample_batch(self.burn_in_density)
+            self.density_estimator.fit(s0_for_d.cpu())
+            if hasattr(self.density_estimator, 'kde'):
+                print('steps: {}, DE fitted: {}, bandwifth: {}'.format(self.number_steps, self.density_estimator.kde,
+                                                                       self.density_estimator.kde.bandwidth))
+
+        # Update Enet
+        if self.memory.number_samples() > self.burn_in_density:
+            e_observed = self._epistemic_uncertainty(s0).gather(1, a0.long()).squeeze()
+            e_loss, e_batch_loss = self.calc_loss(e_observed, torch.tensor(batch_loss).to(self.device),
+                                                  weights.to(self.device))
+            if self.number_steps % self.burn_in_density == 0:
+                # print("steps, Top k samples from Qnet: batch_loss:", self.number_steps, torch.topk(torch.tensor(batch_loss), 10))
+                # print("Top k samples from Enet, e_observed:", torch.topk(e_observed, 10))
+                print('steps, e_loss', self.number_steps, e_loss)
+                # print('density', self.density_estimator.score_samples(s0.cpu()).to(self.device))
+
+            self.e_optimizer.zero_grad()
+            e_loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(self.enet.parameters(), 5)
+            self.e_optimizer.step()
+
         # Update replay memory
         self.memory.update_priorities(indices, batch_loss)
         return
+
+    def _epistemic_uncertainty(self, x):
+        """
+        Computes uncertainty for input sample and
+        returns epistemic uncertainty estimate.
+        """
+        u_in = []
+        if 'x' in self.features:
+            u_in.append(x)
+        if 'd' in self.features:
+            density_feature = self.density_estimator.score_samples(x.cpu()).to(self.device)
+            u_in.append(density_feature)
+        u_in = torch.cat(u_in, dim=1)
+        return self.enet.forward(u_in)
+
+    def pretrain_density_estimator(self, x):
+        """
+        Trains density estimator on input samples
+        """
+
+        self.density_estimator.fit(x.cpu())

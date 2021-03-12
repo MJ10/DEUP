@@ -1,29 +1,26 @@
-from .buffer import Buffer
-from .density_estimator import FixedSmoothKernelDensityEstimator, VarianceSource, DistanceEstimator, GPVarianceEstimator, ZeroVarianceEstimator
-from ..models.mcdropout import MCDropout
-from ..models.ensemble import Ensemble
-from .density_picker import CrossValidator
-from .networks import create_optimizer, create_network
+from buffer import Buffer
+from uncertaintylearning.features.density_estimator import FixedSmoothKernelDensityEstimator
+from uncertaintylearning.features.variance_estimator import GPVarianceEstimator, ZeroVarianceEstimator
+from uncertaintylearning.features.distance_estimator import DistanceEstimator
+from uncertaintylearning.models.mcdropout import MCDropout
+from uncertaintylearning.models.ensemble import Ensemble
+from uncertaintylearning.utils.density_picker import CrossValidator
+from uncertaintylearning.utils.networks import create_optimizer
+from uncertaintylearning.utils import invsoftplus
 from torch.utils.data import TensorDataset, random_split
 import torch
-import numpy as np
-from ..models import EpistemicPredictor
+from uncertaintylearning.models import DEUP
 from copy import deepcopy
-from .feature_generator import FeatureGenerator
+from uncertaintylearning.features.feature_generator import FeatureGenerator
 from botorch.acquisition import ExpectedImprovement, qExpectedImprovement
 from botorch.optim import optimize_acqf
 from botorch.generation.sampling import MaxPosteriorSampling
 from torch.quasirandom import SobolEngine
 import matplotlib.pyplot as plt
 from botorch.models import SingleTaskGP
-from sklearn.linear_model import LinearRegression
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from botorch.fit import fit_gpytorch_model
 from gpytorch.utils.errors import NotPSDError
-
-
-def invsoftplus(x, beta=1):
-    return 1. / beta * (torch.log((beta * x).exp() - 1))
 
 
 def init_buffer(networks, X_init, Y_init, features, domain=None, epsilon=1e-5, loggify=False, repeats=2, beta=None):
@@ -197,10 +194,11 @@ def one_step_acquisition(oracle, full_train_X, full_train_Y, features, buffer, n
     if beta is not None:
         assert not use_log_unc
     fg = make_feature_generator(features, full_train_X, full_train_Y, domain, epsilon)
-    model = EpistemicPredictor(full_train_X, full_train_Y, fg, networks, optimizers,
-                               exp_pred_uncert=use_log_unc,
-                               estimator=estimator,
-                               beta=beta)
+    data = {'x': full_train_X, 'y': full_train_Y}
+    model = DEUP(data, fg, networks, optimizers,
+                 exp_pred_uncert=use_log_unc,
+                 estimator=estimator,
+                 beta=beta)
 
     f_losses.extend(model.fit(epochs))
 

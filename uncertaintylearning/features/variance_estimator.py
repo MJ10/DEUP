@@ -3,20 +3,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
 from tqdm import tqdm
-from .density_estimator import VarianceSource
-import numpy as np
 from sklearn.preprocessing import MinMaxScaler
+from gpytorch.mlls import ExactMarginalLogLikelihood
+from botorch.fit import fit_gpytorch_model
 
 # Taken from https://github.com/y0ast/deterministic-uncertainty-quantification/blob/master/utils/resnet_duq.py
 class ResNet_DUQ(nn.Module):
     def __init__(
-        self,
-        input_size,
-        num_classes,
-        centroid_size,
-        model_output_size,
-        length_scale,
-        gamma,
+            self,
+            input_size,
+            num_classes,
+            centroid_size,
+            model_output_size,
+            length_scale,
+            gamma,
     ):
         super().__init__()
 
@@ -70,11 +70,13 @@ class ResNet_DUQ(nn.Module):
 
         return z, y_pred
 
+
 def bce_loss_fn(y_pred, y, num_classes):
     bce = F.binary_cross_entropy(y_pred, y, reduction="sum").div(
         num_classes * y_pred.shape[0]
     )
     return bce
+
 
 def calc_gradients_input(x, y_pred):
     gradients = torch.autograd.grad(
@@ -88,6 +90,7 @@ def calc_gradients_input(x, y_pred):
 
     return gradients
 
+
 def calc_gradient_penalty(x, y_pred):
     gradients = calc_gradients_input(x, y_pred)
 
@@ -99,8 +102,10 @@ def calc_gradient_penalty(x, y_pred):
 
     return gradient_penalty
 
-class DUQVarianceSource(VarianceSource):
-    def __init__(self, input_size, num_classes, centroid_size, model_output_size, length_scale, gamma, l_gradient_penalty, device):
+
+class DUQVarianceSource:
+    def __init__(self, input_size, num_classes, centroid_size, model_output_size, length_scale, gamma,
+                 l_gradient_penalty, device):
         self.l_gradient_penalty = l_gradient_penalty
         self.device = device
         self.num_classes = num_classes
@@ -114,7 +119,7 @@ class DUQVarianceSource(VarianceSource):
             self.optimizer, milestones=[25, 50, 75], gamma=0.2
         )
         self.postprocessor = MinMaxScaler()
-    
+
     def fit(self, epochs=75, train_loader=None, save_path=None, val_loader=None):
         self.model.train()
         for epoch in tqdm(range(epochs)):
@@ -145,7 +150,7 @@ class DUQVarianceSource(VarianceSource):
                 with torch.no_grad():
                     self.model.eval()
                     self.model.update_embeddings(x, y)
-                
+
                 if i % 50 == 0:
                     print("Iteration: {}, Loss = {}".format(i, running_loss / (i + 1)))
 
@@ -159,12 +164,12 @@ class DUQVarianceSource(VarianceSource):
                         inputs, y = inputs.to(self.device), F.one_hot(targets, self.num_classes).float().to(self.device)
                         z, outputs = self.model(inputs)
                         loss = bce_loss_fn(outputs, y, self.num_classes)
-                        targets= targets.to(self.device)
+                        targets = targets.to(self.device)
                         test_loss += loss.item()
                         _, predicted = outputs.max(1)
                         total += targets.size(0)
                         correct += predicted.eq(targets.to(self.device)).sum().item()
-                acc = 100.*correct/total
+                acc = 100. * correct / total
                 print("Epoch: {}, test acc: {}, test loss {}".format(epoch, acc, test_loss / total))
 
             self.scheduler.step()
@@ -177,9 +182,9 @@ class DUQVarianceSource(VarianceSource):
 
         with torch.no_grad():
             scores = []
-            
+
             if loader is None:
-                data=data.to(self.device)
+                data = data.to(self.device)
                 output = self.model(data)[1]
                 kernel_distance, pred = output.max(1)
 
@@ -201,4 +206,41 @@ class DUQVarianceSource(VarianceSource):
         else:
             values = self.postprocessor.transform(scores.unsqueeze(-1)).squeeze()
         values = torch.FloatTensor(values).unsqueeze(-1)
+        return values
+
+
+class ZeroVarianceEstimator:
+    def score_samples(self, test_points):
+        return torch.zeros((test_points.size(0), 1))
+
+
+class GPVarianceEstimator:
+    def __init__(self, gp_model, loggify=False, use_variance_scaling=False, domain=None):
+        self.gp_model = gp_model
+        self.loggify = loggify
+        self.postprocessor = None
+        if use_variance_scaling:
+            self.postprocessor = MinMaxScaler()
+        self.domain = None if not use_variance_scaling else domain
+
+    def fit(self):
+        mll = ExactMarginalLogLikelihood(self.gp_model.likelihood, self.gp_model)
+        fit_gpytorch_model(mll)
+        if self.domain is not None and self.postprocessor is not None:
+            self.fit_postprocessor_on_domain(self.domain)
+
+    def fit_postprocessor_on_domain(self, domain):
+        values = self.score_samples(domain, no_postprocess=True)
+        self.postprocessor.fit(values)
+
+    def score_samples(self, test_points, no_postprocess=False):
+        scores = self.gp_model(test_points).stddev.detach().unsqueeze(-1).pow(2)
+        if self.loggify:
+            scores = scores.log()
+        if no_postprocess:
+            return scores
+        if isinstance(self.postprocessor, MinMaxScaler):
+            scores = self.postprocessor.transform(scores.numpy())
+        values = torch.FloatTensor(scores)
+        assert values.ndim == 2 and values.size(0) == len(test_points)
         return values
