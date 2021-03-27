@@ -32,7 +32,7 @@ class BaseModel(Model):
     def get_prediction_with_uncertainty(self, x, **kwargs):
         if x.ndim == 3:
             assert len(kwargs) == 0, "no kwargs can be given if x.ndim == 3"
-            preds = self.get_prediction_with_uncertainty(x.view(x.size(0) * x.size(1), x.size(2)))
+            preds = self.get_prediction_with_uncertainty(x.view(x.size(0) * x.size(1), x.size(2)), **kwargs)
             return preds[0].view(x.size(0), x.size(1), 1), preds[1].view(x.size(0), x.size(1), 1)
 
     def posterior(self, x, **kwargs):
