@@ -1,4 +1,4 @@
-from buffer import Buffer
+from .buffer import Buffer
 from uncertaintylearning.features.density_estimator import FixedSmoothKernelDensityEstimator
 from uncertaintylearning.features.variance_estimator import GPVarianceEstimator, ZeroVarianceEstimator
 from uncertaintylearning.features.distance_estimator import DistanceEstimator
@@ -58,7 +58,7 @@ def init_buffer(networks, X_init, Y_init, features, domain=None, epsilon=1e-5, l
     return buffer, fg
 
 
-def make_feature_generator(features, X, Y, domain, epsilon=None):
+def make_feature_generator(features, X, Y, domain, epsilon=None, loggify=False, uvs=True, variance_model=None):
     dim = X.size(-1)
     density_estimator = None
     distance_estimator = None
@@ -76,8 +76,11 @@ def make_feature_generator(features, X, Y, domain, epsilon=None):
         density_estimator.fit(X)
 
     if 'v' in features:
-        model = SingleTaskGP(X, Y)
-        variance_estimator = GPVarianceEstimator(model, loggify=False, use_variance_scaling=True, domain=domain)
+        if variance_model is not None:
+            model = variance_model
+        else:
+            model = SingleTaskGP(X, Y)
+        variance_estimator = GPVarianceEstimator(model, loggify=loggify, use_variance_scaling=uvs, domain=domain)
         try:
             variance_estimator.fit()
         except NotPSDError:
