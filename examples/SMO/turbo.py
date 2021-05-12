@@ -7,7 +7,7 @@ import torch
 from botorch.acquisition import qExpectedImprovement, ExpectedImprovement
 from botorch.fit import fit_gpytorch_model
 from botorch.generation import MaxPosteriorSampling
-from botorch.models import  SingleTaskGP
+from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
 from botorch.test_functions import Ackley
 from botorch.utils.transforms import unnormalize
@@ -24,21 +24,23 @@ from .smo import make_feature_generator
 
 from .buffer import Buffer
 from torch.utils.data import TensorDataset, random_split
-
+from gpytorch.utils.errors import NotPSDError
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 dtype = torch.float
 SMOKE_TEST = os.environ.get("SMOKE_TEST")
+
+dim = 10
 low, up = -10, 15
-fun = Ackley(dim=10, negate=True).to(dtype=dtype, device=device)
-fun.bounds[0, :].fill_(low)
-fun.bounds[1, :].fill_(up)
-dim = fun.dim
-lb, ub = fun.bounds
 
-
-def eval_objective(x):
+def eval_objective(x, dim=10):
     """This is a helper function we use to unnormalize and evalaute a point"""
+
+    fun = Ackley(dim=dim, negate=True).to(dtype=dtype, device=device)
+    fun.bounds[0, :].fill_(low)
+    fun.bounds[1, :].fill_(up)
+    dim = fun.dim
+    lb, ub = fun.bounds
     return fun(unnormalize(x, fun.bounds))
 
 
@@ -81,7 +83,8 @@ def update_state(state, Y_next):
         state.failure_counter = 0
 
     state.best_value = max(state.best_value, max(Y_next).item())
-    if state.length < state.length_min or state.step > state.max_step:
+    # if state.length < state.length_min or state.step > state.max_step:
+    if state.step > state.max_step:
         state.restart_triggered = True
     return state
 
@@ -102,8 +105,10 @@ def generate_batch(
     num_restarts=10,
     raw_samples=512,
     acqf="ts",  # "ei" or "ts"
-    deup=False
+    deup=False,
+    turbo=True,
 ):
+    dim = X.shape[-1]
     assert acqf in ("ts", "ei")
     assert X.min() >= 0.0 and X.max() <= 1.0 and torch.all(torch.isfinite(Y))
     if n_candidates is None:
@@ -119,9 +124,11 @@ def generate_batch(
     weights = weights / torch.prod(weights.pow(1.0 / len(weights)))
     tr_lb = torch.clamp(x_center - weights * state.length / 2.0, 0.0, 1.0)
     tr_ub = torch.clamp(x_center + weights * state.length / 2.0, 0.0, 1.0)
+    if not turbo:
+        tr_lb = torch.zeros(dim)
+        tr_ub = torch.ones(dim)
 
     if acqf == "ts":
-        dim = X.shape[-1]
         sobol = SobolEngine(dim, scramble=True)
         pert = sobol.draw(n_candidates).to(dtype=dtype, device=device)
         pert = tr_lb + (tr_ub - tr_lb) * pert
@@ -148,13 +155,20 @@ def generate_batch(
             ei = qExpectedImprovement(model, Y.max(), maximize=True)
         else:
             ei = ExpectedImprovement(model, Y.max(), maximize=True)
-        X_next, acq_value = optimize_acqf(
-            ei,
-            bounds=torch.stack([tr_lb, tr_ub]),
-            q=batch_size,
-            num_restarts=num_restarts,
-            raw_samples=raw_samples,
-        )
+        try:
+            X_next, acq_value = optimize_acqf(
+                ei,
+                bounds=torch.stack([tr_lb, tr_ub]),
+                q=batch_size,
+                num_restarts=num_restarts,
+                raw_samples=raw_samples,
+            )
+        except NotPSDError:
+            sobol = SobolEngine(dim, scramble=True)
+            pert = sobol.draw(batch_size).to(dtype=dtype, device=device)
+            pert = tr_lb + (tr_ub - tr_lb) * pert
+            X_next = pert
+            print('Warning: NotPSDError, using {} purely random candidates for this step'.format(batch_size))
 
     return X_next
 
@@ -163,7 +177,7 @@ n_init = 20  # 2*dim, which corresponds to 5 batches of 4
 
 X_turbo = get_initial_points(dim, n_init)
 Y_turbo = torch.tensor(
-    [eval_objective(x) for x in X_turbo], dtype=dtype, device=device
+    [eval_objective(x, dim) for x in X_turbo], dtype=dtype, device=device
 ).unsqueeze(-1)
 
 state = TurboState(dim, batch_size=batch_size)
@@ -206,13 +220,14 @@ def init_buffer(X_init, Y_init, features, domain=None, epsilon=1e-5,
 def train_turbo(X_turbo, Y_turbo, state=state, deup=False,
                 features='xv',
                 use_log_unc=True, domain=domain,
-                batch_size=batch_size, acqf='ei',):
+                batch_size=batch_size, acqf='ei', turbo=True, silent=True,
+                dim=10):
     f_losses = []
     e_losses = []
     best_values = []
     candidate = None
     candidate_image = None
-    buffer=None
+    buffer = None
     if deup:
         buffer, fg = init_buffer(X_turbo, (Y_turbo - Y_turbo.mean()) / Y_turbo.std(), features, domain,
                                  epsilon=1e-5,
@@ -235,12 +250,13 @@ def train_turbo(X_turbo, Y_turbo, state=state, deup=False,
                                         loggify=True, uvs=False, variance_model=model.f_predictor)
             model.feature_generator = fg
 
-
             if candidate is not None:  # which means candidate is now part of full_train_X
                 features_lis = fg(candidate)
                 buffer.add_features(features_lis)
-
-                targets = (model.f_predictor(candidate).mean.unsqueeze(-1) - candidate_image).pow(2).detach()
+                try:
+                    targets = (model.f_predictor(candidate).mean.unsqueeze(-1) - candidate_image).pow(2).detach()
+                except NotPSDError:
+                    targets = (candidate_image - candidate_image).detach()
                 if use_log_unc:
                     targets = targets.log().clamp_min_(-20)
                 buffer.add_targets(targets)
@@ -259,10 +275,11 @@ def train_turbo(X_turbo, Y_turbo, state=state, deup=False,
             num_restarts=NUM_RESTARTS,
             raw_samples=RAW_SAMPLES,
             acqf=acqf,
-            deup=deup
+            deup=deup,
+            turbo=turbo
         )
         Y_next = torch.tensor(
-            [eval_objective(x) for x in X_next], dtype=dtype, device=device
+            [eval_objective(x, dim) for x in X_next], dtype=dtype, device=device
         ).unsqueeze(-1)
         # print('Y_next', Y_next)
 
@@ -288,9 +305,10 @@ def train_turbo(X_turbo, Y_turbo, state=state, deup=False,
         Y_turbo = torch.cat((Y_turbo, Y_next), dim=0)
 
         # Print current status
-        print(
-            f"{len(X_turbo)}) Best value: {state.best_value:.2e}, TR length: {state.length:.2e}"
-        )
+        if not silent:
+            print(
+                f"{len(X_turbo)}) Best value: {state.best_value:.2e}, TR length: {state.length:.2e}"
+            )
 
         best_values.append(state.best_value)
 

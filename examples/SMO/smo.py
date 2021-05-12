@@ -66,12 +66,14 @@ def make_feature_generator(features, X, Y, domain, epsilon=None, loggify=False, 
     training_set = X if epsilon is not None else None
 
     if 'd' in features:
-        cv = CrossValidator(X.numpy(), Y.numpy(), alpha_search_space=[.1, .3, .5, .7, .9])
-        cv.fit()
+        # cv = CrossValidator(X.numpy(), Y.numpy(), alpha_search_space=[.1, .3, .5, .7, .9])
+        # cv.fit()
 
-        density_estimator = FixedSmoothKernelDensityEstimator(bandwidth=cv.best_params_['bandwidth'],
-                                                              alpha=cv.best_params_['alpha'],
-                                                              use_density_scaling=False, domain=torch.cat((domain, X)))
+        # density_estimator = FixedSmoothKernelDensityEstimator(bandwidth=cv.best_params_['bandwidth'],
+        #                                                       alpha=cv.best_params_['alpha'],
+        #                                                       use_density_scaling=False, domain=torch.cat((domain, X)))
+        density_estimator = FixedSmoothKernelDensityEstimator(bandwidth=.1, alpha=.3, use_log_density=True, use_density_scaling=True,
+                                                domain=torch.cat((domain, X)))
 
         density_estimator.fit(X)
 

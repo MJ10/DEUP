@@ -27,7 +27,7 @@ class FeatureGenerator:
         if 'x' in self.features:
             features.append(x)
         if 'd' in self.features:
-            density_feature = self.density_estimator.score_samples(x.to(device), device=device)
+            density_feature = self.density_estimator.score_samples(x.to(device)).to(device)
             features.append(density_feature)
         if 'D' in self.features:
             distance_feature = self.distance_estimator.score_samples(x.cpu())
