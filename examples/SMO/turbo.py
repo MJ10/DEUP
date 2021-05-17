@@ -221,7 +221,7 @@ def train_turbo(X_turbo, Y_turbo, state=state, deup=False,
                 features='xv',
                 use_log_unc=True, domain=domain,
                 batch_size=batch_size, acqf='ei', turbo=True, silent=True,
-                dim=10):
+                dim=10, print_every=None):
     f_losses = []
     e_losses = []
     best_values = []
@@ -234,6 +234,8 @@ def train_turbo(X_turbo, Y_turbo, state=state, deup=False,
                                  loggify=use_log_unc)
 
     while not state.restart_triggered:  # Run until TuRBO converges
+        if print_every is not None and state.step % print_every == 0:
+            print('step', state.step, state.best_value)
         # Fit a GP model
         train_Y = (Y_turbo - Y_turbo.mean()) / Y_turbo.std()
         if not deup:
