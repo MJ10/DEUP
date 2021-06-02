@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from uncertaintylearning.features.density_estimator import MAFMOGDensityEstimator
-from uncertaintylearning.features.variance_estimator import DUQVarianceSource
+from uncertaintylearning.features.variance_estimator import DUEVarianceSource
 from uncertaintylearning.utils import create_network, create_wrapped_network
 from uncertaintylearning.utils.resnet import ResNet18plus
 from uncertaintylearning.models import DEUP
@@ -93,20 +93,21 @@ print(4)
 model = model.to(device)
 
 model_save_path = save_base_path + "resnet18_cifar_full_new.pt"
-epochs = 1
+epochs = 100
 model.fit(epochs=epochs, progress=True)
 print(5)
 torch.save(model.f_predictor, model_save_path)
 
 density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=9e-5,
-                                           use_log_density=True, epochs=1, use_density_scaling=True)
-variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
+                                           use_log_density=True, epochs=40, use_density_scaling=True)
+variance_source = DUEVarianceSource(32, 10, True, 1, 0.99,
+                50, 0.05, 5e-4, None, 'RBF', False, False, 2, device)
 
 density_save_path = save_base_path + "mafmog_cifar_full_new.pt"
 density_estimator.fit(dataset, device, density_save_path)
 
-var_save_path = save_base_path + "duq_cifar_full_new.pt"
-variance_source.fit(train_loader=trainloader, save_path=var_save_path, epochs=1)
+var_save_path = save_base_path + "due_cifar_full_new_"
+variance_source.fit(train_loader=trainloader, save_path=var_save_path)
 
 for split_num in range(len(splits)):
     trainset = get_split_dataset(split_num, dataset)
@@ -114,14 +115,15 @@ for split_num in range(len(splits)):
                                               shuffle=True, num_workers=2)
 
     density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=9e-5,
-                                               use_log_density=True, epochs=1, use_density_scaling=True)
-    variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
+                                               use_log_density=True, epochs=40, use_density_scaling=True)
+    variance_source = DUEVarianceSource(32, 10, True, 1, 0.99,
+                50, 0.05, 5e-4, None, 'RBF', False, False, 2, device)
 
     density_save_path = save_base_path + "mafmog_cifar_split_{}_new.pt".format(split_num)
     density_estimator.fit(trainset, device, density_save_path)
 
-    var_save_path = save_base_path + "duq_cifar_split_{}_new.pt".format(split_num)
-    variance_source.fit(train_loader=trainloader, save_path=var_save_path, epochs=1)
+    var_save_path = save_base_path + "due_cifar_split_{}_new_".format(split_num)
+    variance_source.fit(train_loader=trainloader, save_path=var_save_path)
 
     networks = {
         'e_predictor': create_network(2, 1, 1024, 'relu', False, 3),  # not used in this script

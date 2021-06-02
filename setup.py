@@ -15,6 +15,6 @@ setup(
         'bsuite',
         'torchvision',
         'requests',
-        'tqdm',
+        'tqdm'
     ],
 )
