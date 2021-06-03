@@ -37,6 +37,8 @@ python examples/SMO/main.py
 ```
 , with adequate arguments (`--method`, `--n-steps`, etc...) to optimize a function and save the results in a pickle file.
 
+To compare Turbo-EI and Turbo-DEUP-EI, the notebooks   `notebooks/turbo-ackleyloop.ipynb` and `notebooks/turbodeup.ipynb` allow to recreate the figures in the paper/
+
 
 ## Reinforcement Learning
 DQN implementation is based on [here](https://github.com/pluebcke/dqn_experiments) and all the experiments use [bsuite](https://github.com/deepmind/bsuite).

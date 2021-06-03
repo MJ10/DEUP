@@ -182,7 +182,7 @@ class DEUP(BaseModel):
             predicted_uncertainties = softplus(predicted_uncertainties, beta=self.beta)
         return predicted_uncertainties
 
-    def get_prediction_with_uncertainty(self, x, features=None):
+    def get_prediction_with_uncertainty(self, x, features=None, **kwargs):
         out = super().get_prediction_with_uncertainty(x)
         if out is None:
             return self.f_predictor(x), self._uncertainty(features, x if features is None else None)

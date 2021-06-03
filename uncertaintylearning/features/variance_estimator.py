@@ -215,8 +215,9 @@ class ZeroVarianceEstimator:
 
 
 class GPVarianceEstimator:
-    def __init__(self, gp_model, loggify=False, use_variance_scaling=False, domain=None):
+    def __init__(self, gp_model, loggify=False, use_variance_scaling=False, domain=None, fitted=False):
         self.gp_model = gp_model
+        self.fitted = fitted
         self.loggify = loggify
         self.postprocessor = None
         if use_variance_scaling:
@@ -224,8 +225,9 @@ class GPVarianceEstimator:
         self.domain = None if not use_variance_scaling else domain
 
     def fit(self):
-        mll = ExactMarginalLogLikelihood(self.gp_model.likelihood, self.gp_model)
-        fit_gpytorch_model(mll)
+        if not self.fitted:
+            mll = ExactMarginalLogLikelihood(self.gp_model.likelihood, self.gp_model)
+            fit_gpytorch_model(mll)
         if self.domain is not None and self.postprocessor is not None:
             self.fit_postprocessor_on_domain(self.domain)
 
