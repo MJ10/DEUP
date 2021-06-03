@@ -7,6 +7,12 @@ from sklearn.preprocessing import MinMaxScaler
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from botorch.fit import fit_gpytorch_model
 
+from gpytorch.mlls import VariationalELBO
+from gpytorch.likelihoods import SoftmaxLikelihood
+
+from due.dkl import DKL_GP, GP, initial_values_for_GP
+from uncertaintylearning.utils.resnet import ResNet18Spec
+
 # Taken from https://github.com/y0ast/deterministic-uncertainty-quantification/blob/master/utils/resnet_duq.py
 class ResNet_DUQ(nn.Module):
     def __init__(
@@ -199,6 +205,148 @@ class DUQVarianceSource:
                     kernel_distance, pred = output.max(1)
 
                     scores.append(-kernel_distance.cpu())
+
+        scores = torch.cat(scores, dim=0)
+        if no_preprocess:
+            values = scores.numpy().ravel()
+        else:
+            values = self.postprocessor.transform(scores.unsqueeze(-1)).squeeze()
+        values = torch.FloatTensor(values).unsqueeze(-1)
+        return values
+
+
+class DUEVarianceSource:
+    def __init__(self, input_size, num_classes, spectral_normalization, n_power_iterations, batchnorm_momentum,
+                n_inducing_points, learning_rate, weight_decay, ard, kernel, separate_inducing_points, lengthscale_prior, coeff, device):
+        self.device = device
+        self.num_classes = num_classes
+        self.n_inducing_points = n_inducing_points
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.ard = ard
+        self.kernel = kernel
+        self.separate_inducing_points = separate_inducing_points
+        self.lengthscale_prior = lengthscale_prior
+        self.coeff = coeff
+
+        self.feature_extractor = ResNet18Spec(input_size, spectral_normalization, n_power_iterations, batchnorm_momentum)
+        
+        
+        self.postprocessor = MinMaxScaler()
+
+    def save(self, path):
+        torch.save(self.model.state_dict(), path + "model.pt")
+        torch.save(self.likelihood.state_dict(), path + "likelihood.pt")
+
+    def load(self, path):
+        self.model.load_state_dict(torch.load(path + "model.pt"))
+        self.likelihood.load_state_dict(torch.load(path + "likelihood.pt"))
+        self.model.to(self.device)
+        self.likelihood = self.likelihood.to(self.device)
+
+    def fit(self, epochs=75, train_loader=None, save_path=None, val_loader=None):
+        initial_inducing_points, initial_lengthscale = initial_values_for_GP(
+            train_loader.dataset, self.feature_extractor, self.n_inducing_points
+        )
+
+        self.gp = GP(
+            num_outputs=self.num_classes,
+            initial_lengthscale=initial_lengthscale,
+            initial_inducing_points=initial_inducing_points,
+            separate_inducing_points=self.separate_inducing_points,
+            kernel=self.kernel,
+            ard=self.ard,
+            lengthscale_prior=self.lengthscale_prior,
+        )
+
+        self.model = DKL_GP(self.feature_extractor, self.gp)
+        self.model.to(self.device)
+
+        self.likelihood = SoftmaxLikelihood(num_classes=10, mixing_weights=False)
+        self.likelihood = self.likelihood.to(self.device)
+
+        self.elbo_fn = VariationalELBO(self.likelihood, self.gp, num_data=len(train_loader.dataset))
+
+        parameters = [
+            {"params": self.feature_extractor.parameters(), "lr": self.learning_rate},
+            {"params": self.gp.parameters(), "lr": self.learning_rate},
+            {"params": self.likelihood.parameters(), "lr": self.learning_rate},
+        ]
+
+        self.optimizer = torch.optim.SGD(
+            parameters, momentum=0.9, weight_decay=self.weight_decay
+        )
+
+        self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            self.optimizer, milestones=[25, 50, 75], gamma=0.2
+        )
+
+        self.model.train()
+        for epoch in tqdm(range(epochs)):
+            running_loss = 0
+            for i, (x, y) in enumerate(train_loader):
+                self.model.train()
+
+                self.optimizer.zero_grad()
+
+                x, y = x.to(self.device), y.to(self.device)
+
+                y_pred = self.model(x)
+                elbo = -self.elbo_fn(y_pred, y)
+                running_loss += elbo.item()
+                elbo.backward()
+                self.optimizer.step()
+                
+                if i % 50 == 0:
+                    print("Iteration: {}, Loss = {}".format(i, running_loss / (i + 1)))
+
+            if epoch % 1 == 0 and val_loader is not None:
+                self.model.eval()
+                test_loss = 0
+                correct = 0
+                total = 0
+                with torch.no_grad():
+                    for batch_idx, (inputs, targets) in enumerate(val_loader):
+                        inputs, y = inputs.to(self.device), F.one_hot(targets, self.num_classes).float().to(self.device)
+                        y_pred = self.model(data).to_data_independent_dist()
+                        output = self.likelihood(y_pred).probs.mean(0)
+                        predicted = torch.argmax(output, dim=1)
+                        loss = -self.likelihood.expected_log_prob(y, y_pred).mean()
+                        test_loss += loss.item()
+                        targets = targets.to(self.device)
+                        total += targets.size(0)
+                        correct += predicted.eq(targets.to(self.device)).sum().item()
+                acc = 100. * correct / total
+                print("Epoch: {}, test acc: {}, test loss {}".format(epoch, acc, test_loss / total))
+
+            self.scheduler.step()
+
+        if save_path is not None:
+            self.save(save_path)
+
+    def score_samples(self, data=None, loader=None, no_preprocess=False):
+        self.model.eval()
+
+        with torch.no_grad():
+            scores = []
+
+            if loader is None:
+                data = data.to(self.device)
+                y_pred = self.model(data).to_data_independent_dist()
+                output = self.likelihood(y_pred).probs.mean(0)
+
+                scores.append(-(output * output.log()).sum(1).cpu())
+
+            else:
+                for data, target in loader:
+                    data = data.to(self.device)
+                    # target = target.cuda()
+                    y_pred = self.model(data).to_data_independent_dist()
+                    output = self.likelihood(y_pred).probs.mean(0)
+                    
+                    output = self.likelihood(y_pred).probs.mean(0)
+
+                    scores.append(-(output * output.log()).sum(1).cpu())
 
         scores = torch.cat(scores, dim=0)
         if no_preprocess:

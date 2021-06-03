@@ -17,6 +17,11 @@ The notebook `notebooks/fixed_training_set.ipynb` illustrates how DEUP is used t
 
 
 ## Rejecting Difficult Examples
+Install DUE:
+```bash
+pip install git+https://github.com/y0ast/DUE.git
+```
+
 We first train the main predictor, variance source and density source on the entire dataset and the spilts for training. The procedure is described in Appendix D.1. This script should take about a day to run on a V100 GPU.
 ```bash
 python examples/ood_detection/ood_pretrain.py --save_base_path <path_to_save_models> --data_base_path <path_to_store/load_data>

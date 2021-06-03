@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from uncertaintylearning.features.density_estimator import MAFMOGDensityEstimator
-from uncertaintylearning.features.variance_estimator import DUQVarianceSource
+from uncertaintylearning.features.variance_estimator import DUEVarianceSource
 from uncertaintylearning.utils import create_network
 from uncertaintylearning.models import DEUP
 from uncertaintylearning.utils.resnet import ResNet18plus
@@ -99,7 +99,9 @@ trainloader = torch.utils.data.DataLoader(trainset, batch_size=256,
 density_estimator = MAFMOGDensityEstimator(n_components=10, hidden_size=1024, batch_size=100, n_blocks=5, lr=1e-4,
                                            use_log_density=True, epochs=32, use_density_scaling=True)
 density_estimator.fit(trainset, device, "", init_only=True)
-variance_source = DUQVarianceSource(32, 10, 512, 512, 0.1, 0.999, 0.5, device)
+variance_source = DUEVarianceSource(32, 10, True, 1, 0.99,
+                50, 0.05, 5e-4, None, 'RBF', False, False, 2, device)
+variance_source.fit(train_loader=trainloader, save_path=None, epochs=0)
 
 networks = {
     'e_predictor': create_network(len(features), 1, 1024, 'relu', False, 5),
@@ -129,16 +131,16 @@ model = model.to(device)
 
 ood_data_x, ood_data_y = [], []
 
-for split_num in range(0):
+for split_num in range(len(splits)):
+    print(split_num)
     density_save_path = save_base_path + "mafmog_cifar_split_{}_new.pt".format(split_num)
     density_estimator.model.load_state_dict(torch.load(density_save_path))
     density_estimator.model.to(device)
     density_estimator.postprocessor.fit(
         density_estimator.score_samples(trainset, device, no_preprocess=True))
 
-    var_save_path = save_base_path + "duq_cifar_split_{}_new.pt".format(split_num)
-    variance_source.model = torch.load(var_save_path)
-    variance_source.model.to(device)
+    var_save_path = save_base_path + "due_cifar_split_{}_new_".format(split_num)
+    variance_source.load(var_save_path)
     variance_source.postprocessor.fit(
         variance_source.score_samples(loader=trainloader, no_preprocess=True))
 
@@ -153,23 +155,22 @@ for split_num in range(0):
     ood_data_x.append(epi_x)
     ood_data_y.append(epi_y)
 
-# ood_x_set = torch.cat(ood_data_x, dim=0)
-# ood_y_set = torch.cat(ood_data_y, dim=0)
+ood_x_set = torch.cat(ood_data_x, dim=0)
+ood_y_set = torch.cat(ood_data_y, dim=0)
 
 # torch.save(ood_y_set, save_base_path+"y_18_" + features + ".pt")
 # torch.save(ood_x_set, save_base_path+"x_18_" + features +".pt")
 
-ood_y_set = torch.load(save_base_path + "y_18_" + features + ".pt")
-ood_x_set = torch.load(save_base_path + "x_18_" + features + ".pt")
+# ood_y_set = torch.load(save_base_path + "y_18_" + features + ".pt")
+# ood_x_set = torch.load(save_base_path + "x_18_" + features + ".pt")
 
 density_save_path = save_base_path + "mafmog_cifar_full_new.pt"
 density_estimator.model.load_state_dict(torch.load(density_save_path))
 density_estimator.model.to(device)
 density_estimator.postprocessor.fit(density_estimator.score_samples(trainset, device, no_preprocess=True))
 
-var_save_path = save_base_path + "duq_cifar_full_new.pt"
-variance_source.mode = torch.load(var_save_path)
-variance_source.model.to(device)
+var_save_path = save_base_path + "due_cifar_full_new_"
+variance_source.load(var_save_path)
 variance_source.postprocessor.fit(variance_source.score_samples(loader=trainloader, no_preprocess=True))
 
 model_save_path = save_base_path + "resnet18_cifar_full_new.pt"
