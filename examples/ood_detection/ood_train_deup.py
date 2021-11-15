@@ -144,8 +144,11 @@ if args.ood_set == "SVHN":
     oodset = torchvision.datasets.SVHN(root=data_base_path, split='test',
                                     download=True, transform=test_transform)
 elif args.ood_set == "CIFAR10C":
-    oodset = CIFAR10C("/network/scratch/m/moksh.jain/data/CIFAR10C", 
+    oodset = CIFAR10C(args.cifar10c_path, 
                                     args.corruption_type, transform=test_transform)
+else:
+    print("Please select valid dataset")
+    exit(0)
 
 oodloader = torch.utils.data.DataLoader(oodset, batch_size=128,
                                         shuffle=False, num_workers=2)
