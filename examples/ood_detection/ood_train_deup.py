@@ -15,6 +15,8 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 import scipy.stats
+import os
+from PIL import Image
 
 parser = ArgumentParser()
 
@@ -27,6 +29,15 @@ parser.add_argument("--data_base_path", default='data',
 parser.add_argument("--features", default='bvd',
                     help="features to use for training. combination of [d (desnity), v(variance), b(bit), x]. eg \'dvb\'")
 
+parser.add_argument("--ood_set", default='SVHN',
+                    help="OOD dataset to use for eval. CIFAR10C or SVHN")
+
+parser.add_argument("--corruption_type", default='gaussian_noise',
+                    help="OOD dataset to use for eval")
+
+parser.add_argument("--cifar10c_path", default='data/',
+                    help="path for cifar10c")
+
 args = parser.parse_args()
 
 save_base_path = args.load_base_path
@@ -34,6 +45,54 @@ data_base_path = args.data_base_path
 features = args.features
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+corruptions = [
+    "gaussian_noise",
+    "shot_noise",
+    "speckle_noise",
+    "impulse_noise",
+    "defocus_blur",
+    "gaussian_blur",
+    "motion_blur",
+    "zoom_blur",
+    "snow",
+    "fog",
+    "brightness",
+    "contrast",
+    "elastic_transform",
+    "pixelate",
+    "jpeg_compression",
+    "spatter",
+    "saturate",
+    "frost"
+]
+
+class CIFAR10C(torchvision.datasets.VisionDataset):
+    def __init__(self, root, name, transform=None, target_transform=None):
+        assert name in corruptions
+        super(CIFAR10C, self).__init__(
+            root, transform=transform,
+            target_transform=target_transform
+        )
+        data_path = os.path.join(root, name + '.npy')
+        target_path = os.path.join(root, 'labels.npy')
+        
+        self.data = np.load(data_path)
+        self.targets = np.load(target_path)
+        
+    def __getitem__(self, index):
+        img, targets = self.data[index], self.targets[index]
+        img = Image.fromarray(img)
+        
+        if self.transform is not None:
+            img = self.transform(img)
+        if self.target_transform is not None:
+            targets = self.target_transform(targets)
+            
+        return img, targets
+    
+    def __len__(self):
+        return len(self.data)
 
 
 def get_feature_generator(features, density_estimator, variance_estimator):
@@ -81,8 +140,16 @@ test_transform = transforms.Compose([
     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
 ])
 
-oodset = torchvision.datasets.SVHN(root=data_base_path, split='test',
-                                   download=True, transform=test_transform)
+if args.ood_set == "SVHN":
+    oodset = torchvision.datasets.SVHN(root=data_base_path, split='test',
+                                    download=True, transform=test_transform)
+elif args.ood_set == "CIFAR10C":
+    oodset = CIFAR10C(args.cifar10c_path, 
+                                    args.corruption_type, transform=test_transform)
+else:
+    print("Please select valid dataset")
+    exit(0)
+
 oodloader = torch.utils.data.DataLoader(oodset, batch_size=128,
                                         shuffle=False, num_workers=2)
 
