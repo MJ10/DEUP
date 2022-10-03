@@ -8,10 +8,10 @@ setup(
     install_requires=[
         'matplotlib>=3.3.1',
         'numpy>=1.19.1',
-        'torch>=1.7.0',
+        'torch==1.7.0',
         'scikit-learn',
-        'botorch',
-        'gpytorch',
+        'botorch==0.4.0',
+        'gpytorch==1.5.0',
         'bsuite',
         'torchvision',
         'requests',
