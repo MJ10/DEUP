@@ -1,3 +1,14 @@
 __pycache__
 .ipynb_checkpoints
 *.egg-info
+
+.idea/
+
+runs/
+
+notebooks/figs
+notebooks/old notebooks
+notebooks/pickles
+
+results/
+figures/
