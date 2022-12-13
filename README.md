@@ -19,7 +19,7 @@ The notebook `notebooks/fixed_training_set.ipynb` illustrates how DEUP is used t
 ## Rejecting Difficult Examples
 Install DUE:
 ```bash
-pip install git+https://github.com/y0ast/DUE.git
+pip install git+https://github.com/y0ast/DUE.git@482f9f05788ca62d539e8e5e8684cfc63d39d6f0
 ```
 
 We first train the main predictor, variance source and density source on the entire dataset and the spilts for training. The procedure is described in Appendix D.1. This script should take about a day to run on a V100 GPU.
