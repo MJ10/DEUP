@@ -17,6 +17,7 @@ parser.add_argument("--n-init", type=int, default=6, help='number of initial dat
 parser.add_argument("--function", default='multi_optima', help='one of the keys of SMO.test_functions.functions')
 parser.add_argument("--noise", type=float, default=0, help='additive aleatoric noise')
 parser.add_argument("--method", default='deup', help='one of deup, gp, mcdropout, ensemble')
+parser.add_argument("--features", default='xv', help='one of xv, x, v, xd, d, xvd')
 parser.add_argument("--save_base_path", default='.', help='path to save results')
 
 args = parser.parse_args()
@@ -38,7 +39,7 @@ n_steps = args.n_steps
 
 results = np.zeros((n_seeds, 1 + n_steps))
 use_log_unc = True
-features = 'xv'
+features = args.features
 
 for seed in range(n_seeds):
     torch.manual_seed(10 + seed)
@@ -80,10 +81,13 @@ for seed in range(n_seeds):
                         plot_stuff=False,
                         n_steps=n_steps, epochs=200, domain=X, domain_image=Y, print_each=100, use_log_unc=True,
                         estimator='gp')
+    else:
+        raise NotImplementedError(f"Method {args.method} not implemented !")
     results[seed] = outs[0]
+    print(results[seed])
 
-string = f"{args.method}_{args.function}_{args.n_init}"
+string = f"rebuttal_{args.method}_{features}_{args.function}_{args.n_init}"
 filename = os.path.join(args.save_base_path, string)
 pickle.dump({'results': results, 'string': string}, open(filename, 'wb'))
 
-print('Results saved !')
+print(f'Results saved in {filename}!')
