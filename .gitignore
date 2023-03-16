@@ -9,6 +9,10 @@ runs/
 notebooks/figs
 notebooks/old notebooks
 notebooks/pickles
+notebooks/exploring-bias.ipynb
 
 results/
 figures/
+new_results/
+
+*.DS_Store
